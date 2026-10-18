@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "data_path": "../data/demo_prices.csv",
+  "data_kind": "synthetic_total_return_units",
+  "symbol": "DEMO",
+  "strategy": "buy_and_hold",
+  "starting_cash": "1000.00",
+  "target_weight": "0.50",
+  "fee_bps": "0",
+  "rebalance_every": 2,
+  "decisions_path": null,
+  "execution": "next_session_close",
+  "output_root": "../runs"
+}
