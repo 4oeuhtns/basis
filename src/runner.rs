@@ -10,19 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use chrono::Utc;
-use nautilus_backtest::{
-    config::{BacktestEngineConfig, SimulatedVenueConfig},
-    engine::BacktestEngine,
-};
-use nautilus_common::logging::logger::LoggerConfig;
-use nautilus_execution::models::fee::{FeeModelAny, MakerTakerFeeModel};
-use nautilus_model::{
-    data::BarType,
-    enums::{AccountType, BookType, OmsType},
-    identifiers::{InstrumentId, Symbol, Venue},
-    instruments::{Equity, InstrumentAny},
-    types::{Currency, Money, Price, Quantity},
-};
+use nautilus_model::{data::BarType, identifiers::InstrumentId};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -31,13 +19,14 @@ use crate::{
     config::Config,
     data::{Snapshot, sha256},
     decision::load_decisions,
+    engine,
     strategy::{BaselineStrategy, RunState},
 };
 
 pub const NAUTILUS_VERSION: &str = "0.66.0";
 
 // Identify the code compiled into this binary even before the first Git commit exists.
-fn compiled_source_hash() -> String {
+pub(crate) fn compiled_source_hash() -> String {
     sha256(
         concat!(
             include_str!("main.rs"),
@@ -47,8 +36,15 @@ fn compiled_source_hash() -> String {
             include_str!("decision.rs"),
             include_str!("strategy.rs"),
             include_str!("runner.rs"),
+            include_str!("engine.rs"),
+            include_str!("historical.rs"),
+            include_str!("portfolio/mod.rs"),
+            include_str!("portfolio/config.rs"),
+            include_str!("portfolio/strategy.rs"),
+            include_str!("portfolio/runner.rs"),
             include_str!("../Cargo.toml"),
             include_str!("../qflab/worker.py"),
+            include_str!("../qflab/market_data.py"),
         )
         .as_bytes(),
     )
@@ -68,44 +64,8 @@ pub fn simulate(config: &Config, snapshot: &Snapshot) -> Result<Simulation> {
     let saved = load_decisions(config, snapshot)?;
     let instrument_id = InstrumentId::from(format!("{}.SIM", config.symbol).as_str());
     let bar_type: BarType = format!("{instrument_id}-1-DAY-LAST-EXTERNAL").parse()?;
-    let instrument = InstrumentAny::Equity(
-        Equity::builder()
-            .instrument_id(instrument_id)
-            .raw_symbol(Symbol::from(config.symbol.as_str()))
-            .currency(Currency::USD())
-            .price_precision(2)
-            .price_increment(Price::from("0.01"))
-            .lot_size(Quantity::from(1u64))
-            .ts_event(0.into())
-            .ts_init(0.into())
-            .build()?,
-    );
-    let mut engine = BacktestEngine::new(
-        BacktestEngineConfig::builder()
-            .logging(LoggerConfig {
-                bypass_logging: true,
-                ..Default::default()
-            })
-            .run_analysis(false)
-            .build(),
-    )?;
-    let rate = config.fee_bps()? / Decimal::from(10_000);
-    engine.add_venue(
-        SimulatedVenueConfig::builder()
-            .venue(Venue::from("SIM"))
-            .oms_type(OmsType::Netting)
-            .account_type(AccountType::Cash)
-            .book_type(BookType::L1_MBP)
-            .base_currency(Currency::USD())
-            .starting_balances(vec![Money::from_decimal(config.cash()?, Currency::USD())?])
-            .fee_model(FeeModelAny::MakerTaker(MakerTakerFeeModel::new(rate, rate)).into())
-            .allow_cash_borrowing(false)
-            .bar_execution(true)
-            .trade_execution(false)
-            .bar_adaptive_high_low_ordering(false)
-            .use_message_queue(true)
-            .build()?,
-    )?;
+    let instrument = engine::equity(&config.symbol)?;
+    let mut engine = engine::new_engine(config.cash()?, config.fee_bps()?)?;
     engine.add_instrument(&instrument)?;
     let state = Rc::new(RefCell::new(RunState::default()));
     engine.add_strategy(BaselineStrategy::new(
@@ -123,25 +83,7 @@ pub fn simulate(config: &Config, snapshot: &Snapshot) -> Result<Simulation> {
             .errors
             .push(format!("Engine failure: {error}"));
     }
-    let engine_result = serde_json::to_value(engine.get_result())?;
-    let cache_rc = engine.kernel().cache();
-    let cache = cache_rc.borrow();
-    let mut orders: Vec<Value> = cache
-        .orders_refs(None, None, None, None, None)
-        .iter()
-        .map(|o| serde_json::to_value(&**o))
-        .collect::<std::result::Result<_, _>>()?;
-    orders.sort_by_key(|o| o.to_string());
-    let positions = cache
-        .positions_refs(None, None, None, None, None)
-        .iter()
-        .map(|p| serde_json::to_value(&**p))
-        .collect::<std::result::Result<_, _>>()?;
-    let account = cache
-        .account_for_venue_owned(&Venue::from("SIM"))
-        .context("Final account missing")?;
-    let account_events = serde_json::to_value(account.events())?;
-    drop(cache);
+    let reports = engine::reports(&engine)?;
     engine.dispose();
     let state = state.borrow().clone();
     ensure!(
@@ -150,10 +92,10 @@ pub fn simulate(config: &Config, snapshot: &Snapshot) -> Result<Simulation> {
     );
     Ok(Simulation {
         state,
-        engine_result,
-        orders,
-        positions,
-        account_events,
+        engine_result: reports.engine_result,
+        orders: reports.orders,
+        positions: reports.positions,
+        account_events: reports.account_events,
     })
 }
 
@@ -162,7 +104,7 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-fn write_csv<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
+pub(crate) fn write_csv<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
     let mut writer = csv::Writer::from_path(path)?;
     for row in rows {
         writer.serialize(row)?;
@@ -171,7 +113,7 @@ fn write_csv<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
     Ok(())
 }
 
-fn command_output(program: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn command_output(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program).args(args).output().ok()?;
     output
         .status

@@ -11,6 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.14,<1"]
+data = ["yfinance==1.7.0", "exchange-calendars==4.13.1", "pandas==3.0.6", "pyarrow==26.0.0"]
 
 [tool.setuptools.packages.find]
 include = ["qflab*"]

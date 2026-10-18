@@ -24,7 +24,7 @@ struct CsvRow {
     volume: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Session {
     pub timestamp: DateTime<Utc>,
     pub open: Decimal,
@@ -127,6 +127,10 @@ impl Snapshot {
     }
 
     pub fn bars(&self, bar_type: BarType) -> Result<Vec<Data>> {
+        self.bars_with_precision(bar_type, 2)
+    }
+
+    pub fn bars_with_precision(&self, bar_type: BarType, precision: u8) -> Result<Vec<Data>> {
         self.sessions
             .iter()
             .map(|s| {
@@ -137,11 +141,11 @@ impl Snapshot {
                 )?;
                 Ok(Data::Bar(Bar::new_checked(
                     bar_type,
-                    Price::from_decimal_dp(s.open, 2)?,
-                    Price::from_decimal_dp(s.high, 2)?,
-                    Price::from_decimal_dp(s.low, 2)?,
-                    Price::from_decimal_dp(s.close, 2)?,
-                    Quantity::from(s.volume),
+                    Price::from_decimal_dp(s.open, precision)?,
+                    Price::from_decimal_dp(s.high, precision)?,
+                    Price::from_decimal_dp(s.low, precision)?,
+                    Price::from_decimal_dp(s.close, precision)?,
+                    Quantity::from_decimal_dp(Decimal::from(s.volume), 0)?,
                     ts.into(),
                     ts.into(),
                 )?))

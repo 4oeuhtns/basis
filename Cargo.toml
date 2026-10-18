@@ -15,6 +15,8 @@ nautilus-core = "=0.66.0"
 nautilus-execution = "=0.66.0"
 nautilus-model = "=0.66.0"
 nautilus-trading = "=0.66.0"
+parquet = { version = "=59.0.0", default-features = false, features = ["snap"] }
+bytes = "1"
 rust_decimal = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

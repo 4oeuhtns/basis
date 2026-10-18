@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "mode": "portfolio",
+  "data_kind": "synthetic_total_return_units",
+  "assets": [
+    {"symbol": "ALPHA", "data_path": "../data/portfolio_alpha.csv"},
+    {"symbol": "BETA", "data_path": "../data/portfolio_beta.csv"}
+  ],
+  "strategy": "scheduled",
+  "starting_cash": "1000.00",
+  "cash_reserve": "0.10",
+  "fee_bps": "0",
+  "rebalance_every": 2,
+  "execution": "next_session_close",
+  "output_root": "../runs"
+}
