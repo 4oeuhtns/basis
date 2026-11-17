@@ -27,6 +27,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     import cudaq
 
+from qflab.circuit import uniformly_controlled_ry
 from qflab.problems.expectation import ExpectationProblem
 
 CUDAQ_VERSION = cudaq.__version__
@@ -66,33 +67,6 @@ def _noise_model(noise: dict | None):
 
 
 # --------------------------------------------------------------------- state preparation
-def uniformly_controlled_ry(
-    alphas: np.ndarray, controls: list[int], target: int
-) -> list[tuple[float, int, int]]:
-    """Rotate ``target`` by ``alphas[b]`` when the control qubits hold the bit pattern ``b``.
-
-    Returns a gate list of ``(angle, target, cnot_control)``: an RY, then a CNOT from
-    ``cnot_control`` (or no CNOT when it is -1). This is the standard Gray-code construction:
-    2^m rotations and 2^m CNOTs for m controls, with no ancilla qubits.
-    """
-    m = len(controls)
-    if len(alphas) != 2**m:
-        raise ValueError("Need one angle per control pattern")
-    if m == 0:
-        return [(float(alphas[0]), target, -1)]
-    gates = []
-    patterns = np.arange(2**m)
-    for step in range(2**m):
-        gray = step ^ (step >> 1)
-        # bitwise_count returns uint8; convert before the subtraction or it wraps to 255.
-        signs = 1.0 - 2.0 * (np.bitwise_count(patterns & gray) & 1).astype(float)
-        angle = float(signs @ alphas) / 2**m
-        # The CNOT control is the Gray-code bit that flips before the next rotation.
-        bit = m - 1 if step == 2**m - 1 else ((step + 1) & -(step + 1)).bit_length() - 1
-        gates.append((angle, target, controls[bit]))
-    return gates
-
-
 def amplitude_program(problem: ExpectationProblem) -> list[tuple[float, int, int]]:
     """Gate list for ``A|0> = sum_j sqrt(p_j)|j>(sqrt(1-g_j)|0> + sqrt(g_j)|1>)``."""
     n = problem.num_qubits

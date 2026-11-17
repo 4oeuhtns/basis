@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import itertools
 import time
+from functools import partial
 
 import numpy as np
 from scipy.optimize import minimize
@@ -103,15 +104,44 @@ def interpolate(parameters: list[float]) -> list[float]:
     return stretch(parameters[:depth]) + stretch(parameters[depth:])
 
 
-def solve_qaoa(reference: dict, settings: dict, sampler_factory, decision_seed: int) -> dict:
-    """Run one QAOA decision. ``reference`` is the exact solver's response for the same input."""
+def solve_qaoa(
+    reference: dict,
+    settings: dict,
+    sampler_factory,
+    decision_seed: int,
+    mixer: str = "x",
+    initial_parameters: list[float] | None = None,
+    refine: bool = True,
+) -> dict:
+    """Run one QAOA decision. ``reference`` is the exact solver's response for the same input.
+
+    ``mixer="xy"`` selects the constraint-preserving variant: the cost is the financial
+    objective without a penalty and ``sampler_factory`` must start from the K-hot subspace.
+    ``initial_parameters`` (one gamma and one beta per layer) replaces the grid scan and the
+    layer-by-layer build-up with a warm start; ``refine=False`` then skips optimization
+    entirely and only draws the final sample.
+    """
     settings = validate_solver(dict(settings))
+    if mixer not in ("x", "xy"):
+        raise ValueError("mixer must be 'x' or 'xy'")
     started = time.perf_counter()
     model = reference["canonical_model"]
     symbols, k = model["symbols"], model["select_count"]
     n = len(symbols)
-    qubo = compile_qubo(model, settings["penalty_scale"])
-    audit = verify_qubo(model, qubo, require_dominance=False)
+    penalized = compile_qubo(model, settings["penalty_scale"])
+    audit = verify_qubo(model, penalized, require_dominance=False)
+    if mixer == "x":
+        qubo = penalized
+    else:
+        # No penalty: the mixer cannot leave the feasible subspace. Normalize by the largest
+        # coefficient so that gamma has a comparable scale.
+        largest = max(
+            [abs(int(v)) for v in model["linear"].values()]
+            + [abs(int(p["coefficient"])) for p in model["pairs"]]
+            + [1]
+        )
+        qubo = {**model, "normalization_integer": str(largest)}
+        sampler_factory = partial(sampler_factory, select_count=k)
     _, field, couplings = ising_from_qubo(qubo)
     divisor = int(qubo["normalization_integer"])
     # Normalized QUBO energy of every bitstring; keys list qubit 0 (first symbol) first.
@@ -127,7 +157,10 @@ def solve_qaoa(reference: dict, settings: dict, sampler_factory, decision_seed: 
     optimize_started = time.perf_counter()
     parameters: list[float] = []
     sampler = None
-    for depth in range(1, settings["layers"] + 1):
+    if initial_parameters is not None and len(initial_parameters) != 2 * settings["layers"]:
+        raise ValueError("initial_parameters needs one gamma and one beta per layer")
+    first_depth = 1 if initial_parameters is None else settings["layers"]
+    for depth in range(first_depth, settings["layers"] + 1):
         sampler = sampler_factory(
             field, couplings, layers=depth, seed=seed + depth, target=settings["target"]
         )
@@ -139,7 +172,13 @@ def solve_qaoa(reference: dict, settings: dict, sampler_factory, decision_seed: 
             return value
 
         before = len(trace)
-        if depth == 1:
+        if initial_parameters is not None:
+            start = [float(v) for v in initial_parameters]
+            if not refine:
+                parameters = start
+                stages.append({"layers": depth, "evaluations": 0, "sampled_energy": None})
+                continue
+        elif depth == 1:
             # The cost is close to periodic in gamma (integer penalty levels), so one period
             # of each angle is scanned at cell midpoints.
             axis = [(i + 0.5) * np.pi / settings["grid"] for i in range(settings["grid"])]
@@ -205,10 +244,14 @@ def solve_qaoa(reference: dict, settings: dict, sampler_factory, decision_seed: 
             "feasible_probability": audit["uniform_feasible_probability"],
             "optimal_probability": audit["uniform_optimal_probability"],
         },
+        "mixer": mixer,
+        "start": "cold" if initial_parameters is None else ("warm" if refine else "frozen"),
         "penalty": {
-            "scale": settings["penalty_scale"],
-            "penalty_integer": qubo["penalty_integer"],
-            "all_infeasible_states_are_worse": audit["all_infeasible_states_are_worse"],
+            "scale": settings["penalty_scale"] if mixer == "x" else None,
+            "penalty_integer": penalized["penalty_integer"] if mixer == "x" else "0",
+            "all_infeasible_states_are_worse": audit["all_infeasible_states_are_worse"]
+            if mixer == "x"
+            else None,
         },
         "parameters": parameters,
         "best_sampled_energy": best_value,
@@ -225,7 +268,9 @@ def solve_qaoa(reference: dict, settings: dict, sampler_factory, decision_seed: 
             "shots_per_evaluation": settings["shots"],
             "final_shots": settings["final_shots"],
             "total_shots": len(trace) * settings["shots"] + settings["final_shots"],
-            "basis": "h, rz, rx, cx; all-to-all connectivity; no routing",
+            "basis": "h, rz, rx, cx; all-to-all connectivity; no routing"
+            if mixer == "x"
+            else "Dicke preparation (cx, controlled ry), rz, cx, ring XY mixer; no routing",
         },
         "timings": {
             "optimize_seconds": optimize_seconds,

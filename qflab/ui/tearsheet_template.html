@@ -174,7 +174,7 @@ const fmt = {
   pct: (v, d = 1) => v == null ? "–" : (v * 100).toFixed(d).replace("-", "−") + "%",
   int: (v) => v == null ? "–" : Math.round(v).toLocaleString("en-US"),
   fix: (v, d = 2) => v == null ? "–" : v.toFixed(d).replace("-", "−"),
-  sig: (v, n = 3) => { if (v == null) return "–"; if (v === 0) return "0";
+  sig: (v, n = 3) => { if (v == null) return "–"; if (v === 0 || Math.abs(v) < 1e-17) return "0";
     const a = Math.abs(v); const s = (a >= 1e5 || a < 1e-3) ? v.toExponential(n - 1) : String(Number(v.toPrecision(n)));
     return s.replace("-", "−"); },
   compact: (v) => { if (v == null) return "–"; const a = Math.abs(v);
@@ -334,7 +334,7 @@ function xy(host, o) {
         if (p.tag) sv("text", { class: "direct", x: x + barW / 2, y: up ? y - 6 : y + 14, "text-anchor": "middle" }, g).textContent = p.tag;
       }
     } else if (s.type === "range") {
-      const k = offsets.indexOf(s), dx = (k - (offsets.length - 1) / 2) * 12;
+      const k = offsets.indexOf(s), dx = o.noOffset ? 0 : (k - (offsets.length - 1) / 2) * 12;
       for (const p of s.data) {
         const x = X(p.x) + dx;
         sv("line", { x1: x, x2: x, y1: Y(p.lo), y2: Y(p.hi), stroke: s.color, "stroke-width": 2, "stroke-linecap": "round" }, g);
@@ -457,7 +457,11 @@ function unavailable(name) {
 }
 
 // ---------------------------------------------------------------- entity colors (fixed)
-const METHOD = { monte_carlo: ["Monte Carlo", css("s1")], iqae: ["IQAE (CUDA-Q)", css("s2")], sobol_qmc: ["Sobol QMC", css("s3")] };
+const METHOD = { monte_carlo: ["Monte Carlo", css("s1")], iqae: ["IQAE (CUDA-Q)", css("s2")], sobol_qmc: ["Sobol QMC", css("s3")], mlae: ["MLAE (CUDA-Q)", css("s4")] };
+const SAMPLER = { local: ["Metropolis, single flip", css("s1")], uniform: ["Metropolis, uniform proposal", css("s4")], gibbs: ["Gibbs", css("s3")], parallel_tempering: ["Parallel tempering", css("s5")], quantum: ["Quantum proposal (CUDA-Q)", css("s2")] };
+const fund = (s) => s.split(".")[0];
+const inUnit = (unit, v, d) => unit === "probability" ? fmt.pct(v, d ?? 2) : fmt.money(v, d ?? 4);
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
 const SOLVER = { exact: ["Exact enumeration", css("s1")], qaoa: ["QAOA (CUDA-Q)", css("s2")], benchmark: ["Equal-weight monthly", css("neutral")] };
 const FUNDS = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
 
@@ -505,6 +509,64 @@ function overview(root) {
   }
   root.append(card("Reading the results", "Three questions are answered separately. A better objective value does not establish better returns, and fewer queries do not establish faster execution.", findings));
 
+  const research = el("ul", { class: "plain" });
+  if (OK.risk_models) {
+    const rows = R.risk_models.rows, ratio = mean(rows.map((r) => r.monte_carlo.median_abs_error / Math.max(r.iqae.median_abs_error, 1e-300)));
+    research.append(el("li", { text: `Harder risk problems (${rows.map((r) => r.label.split(":")[0]).join("; ")}): every circuit matched its exact discrete sum. At equal work Monte Carlo's median error was on average ${fmt.fix(ratio, 1)} times IQAE's, while the grids themselves sat up to ${fmt.pct(Math.max(...rows.map((r) => Math.abs(r.model_error / r.continuous_reference.estimate))), 0)} (relative) away from the continuous model.` }));
+  }
+  if (OK.qaoa_study && R.qaoa_study.variants) {
+    const V = R.qaoa_study.variants;
+    if (V.xy_mixer) {
+      const best = [...V.xy_mixer.summary].filter((s) => s.optimal_probability != null).sort((a, b) => b.optimal_probability - a.optimal_probability)[0];
+      if (best) research.append(el("li", { text: `Constraint-preserving QAOA: every shot is a valid portfolio by construction; the best depth (p = ${best.layers}) gives the optimum ${fmt.pct(best.optimal_probability, 1)} of the time, against ${fmt.pct(V.xy_mixer.reference_optimal_probability, 1)} for a random valid portfolio, at ${fmt.int(best.two_qubit_gates)} two-qubit gates per circuit.` }));
+    }
+    if (V.warm_start) {
+      const by = Object.fromEntries(V.warm_start.summary.map((s) => [s.start, s]));
+      if (by.cold && by.warm && by.frozen && by.cold.median_total_shots) research.append(el("li", { text: `Warm starts across dates: reusing the previous date's angles cut the median shots per decision from ${fmt.compact(by.cold.median_total_shots)} to ${fmt.compact(by.warm.median_total_shots)} (P(optimal) ${fmt.pct(by.cold.optimal_probability, 2)} → ${fmt.pct(by.warm.optimal_probability, 2)}); freezing the first date's angles needs only the ${fmt.compact(by.frozen.median_total_shots)}-shot final sample.` }));
+    }
+  }
+  if (OK.gas_study) {
+    const G = R.gas_study;
+    research.append(el("li", { text: `Grover adaptive search found the optimum in ${fmt.pct(G.summary.found_optimum_rate, 0)} of runs with a mean of ${fmt.fix(G.summary.mean_oracle_calls, 0)} coherent objective evaluations, on ${G.summary.qubits} qubits with up to ${fmt.int(G.summary.largest_circuit_gates)} gates per circuit; enumeration needs ${G.baselines.exact_enumeration_evaluations} cheap classical evaluations and proves optimality.` }));
+  }
+  if (OK.relaxation_study) {
+    const X = R.relaxation_study.summary, sparse = X.filter((s) => !s.diagonal_encoding).sort((a, b) => b.found_optimum_rate - a.found_optimum_rate)[0], full = X.find((s) => s.diagonal_encoding);
+    if (sparse) research.append(el("li", { text: `Quantum relaxation (a proposed adaptation): keeping ${fmt.pct(sparse.density, 0)} of pair terms fits the 8 funds on ${sparse.max_qubits} qubits and recovers the optimum in ${fmt.pct(sparse.found_optimum_rate, 0)} of runs${full ? `; with every pair kept the encoding is diagonal (8 qubits) and the method only returns its best sample (${fmt.pct(full.found_optimum_rate, 0)})` : ""}.` }));
+  }
+  if (OK.linear_algebra) {
+    const A = R.linear_algebra, rows = A.readout.filter((r) => r.method === "qsvt" && r.median_weight_error != null).sort((a, b) => b.preparations - a.preparations);
+    research.append(el("li", { text: `Linear algebra: HHL and a QSVT solver reproduce the regularized minimum-variance solution state (state error 1 − fidelity down to ${fmt.sig(Math.min(...A.hhl.filter((r) => r.label === A.readout_system).map((r) => r.infidelity)), 2)} and ${fmt.sig(Math.min(...A.qsvt.filter((r) => r.label === A.readout_system).map((r) => r.infidelity)), 2)} on the ETF system), but the state is not the weights: ${rows.length ? `reading the 8 weights to a ${fmt.pct(rows[0].median_weight_error, 1)} largest error took ${fmt.compact(rows[0].preparations)} state preparations` : "readout did not succeed"}.` }));
+  }
+  if (OK.mcmc_study) {
+    const M = R.mcmc_study, q = M.samplers.find((r) => r.sampler === "quantum"), pt = M.samplers.find((r) => r.sampler === "parallel_tempering");
+    const gap = M.gaps.find((g) => g.beta === M.exact.beta);
+    const gapText = gap ? ` At the target temperature its spectral gap was ${fmt.sig(gap.quantum, 2)}, against ${fmt.sig(gap.local, 2)} for single-flip Metropolis and ${fmt.sig(gap.uniform, 2)} for a uniform random proposal.` : "";
+    if (q && pt) research.append(el("li", { text: `Quantum-assisted MCMC: the proposal is symmetric (${M.quantum_proposal.symmetric ? "verified" : "not verified"}), so the target is preserved.${gapText} Per 1,000 updates it gave ${fmt.fix(q.effective_samples_per_1000_updates, 1)} effective samples against ${fmt.fix(pt.effective_samples_per_1000_updates, 1)} for parallel tempering, and each simulated proposal costs about ${fmt.int(q.mean_gates_per_proposal)} gates.` }));
+  }
+  if (OK.spectral_study) {
+    const S = R.spectral_study, m = S.settings.probe.subspace_size;
+    const at = (method) => S.rows.find((r) => r.family === S.probe_family && r.requested_size === m && r.method === method);
+    const sk = at("SKQD, uniform start"), cl = at("largest variances (classical)");
+    // Cases where some sampling method beat the classical choice by more than one point.
+    const classicalNames = S.classical_methods || ["largest variances (classical)"];
+    const wins = S.rows.filter((r) => !classicalNames.includes(r.method)).filter((r) => {
+      const c = S.rows.filter((x) => x.family === r.family && x.requested_size === r.requested_size && classicalNames.includes(x.method));
+      return c.length && r.vector_error < Math.min(...c.map((x) => x.vector_error)) - 0.01; });
+    const winText = wins.length ? ` Sampling beat the best classical choice in ${wins.length} case(s): ${wins.map((r) => `${r.method} on ${r.family.replace(/ \(.*\)/, "")}, m = ${r.requested_size} (${fmt.pct(r.vector_error, 0)})`).join("; ")}.` : ` In no family and subspace size did sampling choose better coordinates than the best classical rule (${classicalNames.map((n) => n.replace(" (classical)", "")).join(" or ")}).`;
+    if (sk && cl) research.append(el("li", { text: `SQD/SKQD on covariance spectra: on ${S.probe_family.toLowerCase()} with m = ${m} coordinates, SKQD from a uniform start left ${fmt.pct(sk.vector_error, 0)} of the leading factor unexplained against ${fmt.pct(cl.vector_error, 0)} for simply taking the ${m} largest variances.${winText}` }));
+  }
+  if (OK.kernel_study) {
+    const rows = R.kernel_study.rows;
+    research.append(el("li", { text: `Quantum kernels: test accuracies ${rows.map((r) => `${r.method.replace(" fidelity kernel", " kernel")} ${fmt.pct(r.accuracy, 0)}`).join(", ")}; the ${R.kernel_study.data.examples.test}-example intervals overlap, so no kernel is ranked.` }));
+  }
+  if (OK.generative_study) {
+    const G = R.generative_study, q = G.rows.find((r) => r.model === "quantum circuit Born machine"), t = G.rows.find((r) => r.model === "Student t");
+    const h = G.rows.find((r) => r.model.startsWith("training histogram"));
+    const copies = h && Math.abs(q.train_cross_entropy - h.train_cross_entropy) < 1e-3;
+    if (q && t) research.append(el("li", { text: `Quantum generative model: the Born machine's held-out cross-entropy was ${fmt.fix(q.test_cross_entropy, 3)} against ${fmt.fix(t.test_cross_entropy, 3)} for a three-parameter Student t, using ${q.parameters} parameters${copies ? "; it fits its training target, the smoothed histogram, essentially exactly, so it can do no better than that histogram on new data" : ""}.` }));
+  }
+  if (research.childElementCount) root.append(card("Research tracks (plan sections 12 to 14)", "Each study answers its own question on the same simulator. None is evidence of a quantum advantage: the instances are tiny, and strong classical methods sit beside every result.", research));
+
   root.append(el("h2", { text: "Evidence labels" }));
   root.append(el("p", { class: "lede", text: "Every quantum number on this page carries one of these labels. This run contains only the first two." }));
   const labels = [
@@ -549,7 +611,7 @@ function riskLab(root) {
   root.append(el("h2", { text: "Error against work" }));
   root.append(el("p", { class: "lede", text: `${L.benchmark[0].seeds} independent seeds per budget. Work is one payoff evaluation for the classical methods and one application of the state preparation (or its inverse) for IQAE. Faint dots are single runs; lines join medians.` }));
   const g2 = el("div", { class: "grid g2" }); root.append(g2);
-  const methods = ["monte_carlo", "iqae", "sobol_qmc"];
+  const methods = ["monte_carlo", "iqae", "mlae", "sobol_qmc"].filter((k) => L.benchmark.some((b) => b.method === k));
   const scatter = (field, title, sub) => {
     const series = [];
     for (const mth of methods) {
@@ -565,7 +627,8 @@ function riskLab(root) {
       tip: (s, p) => [{ value: fmt.money(p.y, 4), name: field === "abs_error" ? "median absolute error" : "mean interval half-width" }, { value: fmt.int(p.x), name: "median work" }, { value: fmt.pct(p.row.coverage, 0), name: "interval coverage" }, { value: p.row.budget_label, name: "budget" }] });
   };
   scatter("abs_error", "Absolute error", "Distance from each method's own target, in dollars. Lower and further left is better.");
-  scatter("half_width", "Interval half-width", `Width of the reported ${fmt.pct(L.settings.confidence, 0)} interval. Monte Carlo falls as 1/√work; IQAE falls roughly as 1/work.`);
+  scatter("half_width", "Interval half-width", `Width of the reported ${fmt.pct(L.settings.confidence, 0)} interval. Monte Carlo falls as 1/√work; IQAE and MLAE fall roughly as 1/work.`);
+  if (methods.includes("mlae")) root.append(el("p", { class: "note", text: "MLAE (maximum-likelihood amplitude estimation) runs the same circuits as IQAE, but with Grover powers 0, 1, 2, 4, … fixed in advance and one likelihood maximized over all of them. Its interval is a likelihood-ratio interval, so its coverage is asymptotic rather than guaranteed." }));
 
   root.append(card("Benchmark table", "Counting convention: " + L.counting_convention + ".", table([
     { h: "Method", v: (r) => METHOD[r.method][0] }, { h: "Target", v: (r) => r.target }, { h: "Budget", v: (r) => r.budget_label },
@@ -616,6 +679,29 @@ function riskLab(root) {
     { h: "", v: (n) => el("div", { class: "bar", role: "img", "aria-label": `coverage ${fmt.pct(n.coverage, 0)}` }, el("i", { style: `width:${n.coverage * 100}%;background:${css("s2")}` })) },
     { h: "Median error", n: 1, v: (n) => fmt.money(n.median_abs_error, 4) }, { h: "Half-width", n: 1, v: (n) => fmt.money(n.mean_half_width, 4) }, { h: "Max k", n: 1, v: (n) => String(n.max_grover_power) }], N),
     el("p", { class: "note", text: cap(L.noise_model_note) + "." })));
+  if (OK.risk_models) riskModels(root);
+}
+
+function riskModels(root) {
+  const M = R.risk_models, rows = M.rows, S = M.settings;
+  const short = (r) => r.label.split(":")[0];
+  root.append(el("h2", { text: "Harder problems: correlated factors, a nonlinear book, a path-dependent payoff" }));
+  root.append(el("p", { class: "lede", text: `${rows.length} problems without a one-line closed form (plan section 8 and section 14, item 5). The continuous reference is scrambled Sobol with ${fmt.compact(rows[0].continuous_reference.samples)} samples and its own interval; the exact discrete sum stays the target of every estimator. IQAE runs at epsilon = ${S.epsilon}, MLAE with ${S.mlae_circuits} circuits, and Monte Carlo receives IQAE's median work. ${S.seeds} seeds each.` }));
+  const methods = [["iqae", "IQAE (CUDA-Q)", METHOD.iqae[1]], ["mlae", "MLAE (CUDA-Q)", METHOD.mlae[1]], ["monte_carlo", "Monte Carlo, same work as IQAE", METHOD.monte_carlo[1]]];
+  const cats = rows.map((_, i) => i);
+  xy(root.appendChild(el("div", { class: "grid" })), { title: "Median error relative to the exact discrete answer", sub: "Divided by the exact value so that probabilities and prices share one axis. Lower is better.", height: 250,
+    x: { kind: "band", cats, fmt: (i) => short(rows[i]), tipFmt: (i) => rows[i].label, label: "Problem", minGap: 110 },
+    y: { zero: true, fmt: axis.pct },
+    series: methods.map(([k, name, color]) => ({ name, color, type: "bars", fmt: (v) => fmt.pct(v, 2), data: rows.map((r, i) => ({ x: i, y: r[k].median_abs_error / Math.abs(r.exact_discrete) })) })) });
+  root.append(card("Harder problems table", cap(M.loading_note) + ".", table([
+    { h: "Problem", v: (r) => r.label }, { h: "Scenario qubits", n: 1, v: (r) => String(r.problem.scenario_qubits) },
+    { h: "Continuous (Sobol)", n: 1, v: (r) => inUnit(r.unit, r.continuous_reference.estimate) }, { h: "Exact discrete", n: 1, v: (r) => inUnit(r.unit, r.exact_discrete) },
+    { h: "Model error", n: 1, v: (r) => inUnit(r.unit, r.model_error) }, { h: "Circuit check", v: (r) => statusMark(r.circuit_matches_discrete_sum ? "pass" : "fail") },
+    { h: "IQAE error", n: 1, v: (r) => inUnit(r.unit, r.iqae.median_abs_error) }, { h: "cov.", n: 1, v: (r) => fmt.pct(r.iqae.coverage, 0) }, { h: "work", n: 1, v: (r) => fmt.int(r.iqae.median_work) },
+    { h: "MLAE error", n: 1, v: (r) => inUnit(r.unit, r.mlae.median_abs_error) }, { h: "cov.", n: 1, v: (r) => fmt.pct(r.mlae.coverage, 0) }, { h: "work", n: 1, v: (r) => fmt.int(r.mlae.median_work) },
+    { h: "MC error", n: 1, v: (r) => inUnit(r.unit, r.monte_carlo.median_abs_error) }, { h: "cov.", n: 1, v: (r) => fmt.pct(r.monte_carlo.coverage, 0) },
+    { h: "Prep. gates", n: 1, v: (r) => fmt.int(r.state_preparation.rotations + r.state_preparation.cnots) }, { h: "Deepest circuit", n: 1, v: (r) => fmt.int(r.deepest_circuit.gates) },
+  ], rows, { nowrap: true }), el("p", { class: "note", text: "Model error is the exact discrete answer minus the continuous Sobol estimate; it belongs to the grid, not to any estimator. Probabilities are shown in percent, prices in dollars. Coverage is the share of seeds whose interval contained the exact discrete answer." })));
 }
 
 // ================================================================ Portfolio
@@ -785,6 +871,321 @@ function forecasts(root) {
     el("p", { class: "note", text: cap(S.calibration_note) + ". An exposure rule driven by these estimates (the plan's risk overlay) is not built; see DECISIONS.md." })));
 }
 
+// ================================================================ Search variants
+function searchVariants(root) {
+  const Q = OK.qaoa_study ? R.qaoa_study : null, V = (Q && Q.variants) || {};
+  if (!Q && !OK.gas_study && !OK.relaxation_study) return root.append(unavailable("gas_study"));
+  root.append(el("h2", { text: "Other ways to search the same decisions" }));
+  root.append(el("p", { class: "lede", text: "The forecasts, the objective and the three-fund constraint of every saved decision are held fixed; only the search method changes. Plan section 14 items 1 (constraint-preserving QAOA), 2 (warm starts) and 4 (Grover adaptive search), and section 13.1 (quantum relaxation)." }));
+  const decisionDate = (d) => Q ? fmt.mon(Q.decisions[d].data_cutoff) : `#${d + 1}`;
+  const rows = [];
+  if (Q) {
+    const B = Q.baselines;
+    rows.push({ method: "Exact enumeration", found: 1, gap: 0, cost: `${B.exact_enumeration.evaluations} evaluations` });
+    rows.push({ method: "Swap search", found: B.swap_search.found_optimum_rate, cost: `${fmt.fix(B.swap_search.mean_evaluations, 0)} evaluations` });
+    rows.push({ method: `Random bitstrings, best valid of ${fmt.int(Q.settings.final_shots)}`, found: B.uniform_sampling.found_optimum_rate_at_final_shots, popt: B.uniform_sampling.optimal_probability, pfeas: B.uniform_sampling.feasible_probability, cost: `${fmt.int(Q.settings.final_shots)} draws` });
+    for (const s of Q.summary) if (s.found_optimum_rate != null) rows.push({ method: `QAOA, penalty × ${s.penalty_scale}, depth ${s.layers}`, found: s.found_optimum_rate, gap: s.mean_gap, popt: s.optimal_probability, pfeas: s.feasible_probability, cost: `${fmt.compact(s.median_total_shots)} shots`, qubits: s.qubits, gates: s.two_qubit_gates, secs: s.mean_seconds });
+    if (V.xy_mixer) for (const s of V.xy_mixer.summary) if (s.found_optimum_rate != null) rows.push({ method: `QAOA, XY mixer, depth ${s.layers}`, found: s.found_optimum_rate, gap: s.mean_gap, popt: s.optimal_probability, pfeas: s.feasible_probability, cost: `${fmt.compact(s.median_total_shots)} shots`, qubits: s.qubits, gates: s.two_qubit_gates, secs: s.mean_seconds });
+    if (V.warm_start) for (const s of V.warm_start.summary) if (s.start !== "cold" && s.found_optimum_rate != null) rows.push({ method: `QAOA, ${s.start} start, depth ${V.warm_start.settings.layers}`, found: s.found_optimum_rate, gap: s.mean_gap, popt: s.optimal_probability, pfeas: s.feasible_probability, cost: `${fmt.compact(s.median_total_shots)} shots`, qubits: s.qubits, gates: s.two_qubit_gates, secs: s.mean_seconds });
+  }
+  if (OK.gas_study) { const G = R.gas_study.summary; rows.push({ method: "Grover adaptive search", found: G.found_optimum_rate, gap: G.mean_gap, cost: `${fmt.fix(G.mean_oracle_calls, 0)} oracle calls`, qubits: G.qubits, gates: null, secs: G.mean_seconds }); }
+  if (OK.relaxation_study) for (const s of R.relaxation_study.summary) rows.push({ method: `Quantum relaxation, ${fmt.pct(s.density, 0)} of pairs kept`, found: s.found_optimum_rate, gap: s.mean_gap, cost: `${fmt.compact(s.median_total_shots)} shots`, qubits: s.max_qubits, gates: null, secs: s.mean_seconds });
+  root.append(card("Every search method on the same decisions", "Found optimum: share of runs whose returned portfolio is the exact optimum. Gap: mean distance from the optimum in financial objective units (0 is optimal). P(valid) and P(optimal): chance that one final-sample shot is a three-fund portfolio, or the best one, read from the exact output distribution.", table([
+    { h: "Method", v: (r) => r.method }, { h: "Found optimum", n: 1, v: (r) => fmt.pct(r.found, 0) }, { h: "Mean gap", n: 1, v: (r) => r.gap == null ? "–" : fmt.sig(r.gap, 2) },
+    { h: "P(valid)", n: 1, v: (r) => r.pfeas == null ? "–" : fmt.pct(r.pfeas, 1) }, { h: "P(optimal)", n: 1, v: (r) => r.popt == null ? "–" : fmt.pct(r.popt, 2) },
+    { h: "Cost per decision", n: 1, v: (r) => r.cost }, { h: "Qubits", n: 1, v: (r) => r.qubits == null ? "–" : String(r.qubits) },
+    { h: "Two-qubit gates", n: 1, v: (r) => r.gates == null ? "–" : fmt.int(r.gates) }, { h: "Time", n: 1, v: (r) => r.secs == null ? "–" : fmt.secs(r.secs) },
+  ], rows, { nowrap: true }), el("p", { class: "note", text: "Costs are in each method's own unit: objective evaluations for classical search, circuit shots for QAOA and the relaxation, and coherent objective evaluations (oracle calls) for Grover adaptive search. Times are CPU simulation times." })));
+
+  if (Q && V.xy_mixer) {
+    root.append(el("h2", { text: "Constraint-preserving QAOA" }));
+    root.append(el("p", { class: "lede", text: V.xy_mixer.note.charAt(0).toUpperCase() + V.xy_mixer.note.slice(1) + `. Its fair reference is a random valid portfolio (${fmt.pct(V.xy_mixer.reference_optimal_probability, 2)} chance of the optimum), not a random bitstring.` }));
+    const g = el("div", { class: "grid g2" }); root.append(g);
+    const depths = [...new Set([...Q.settings.layers, ...V.xy_mixer.summary.map((s) => s.layers)])].sort((a, b) => a - b);
+    const penaltyColors = [css("s2"), css("s5")];
+    const series = Q.settings.penalty_scales.map((sc, i) => ({ name: `Penalty QAOA × ${sc}`, color: penaltyColors[i % 2], type: "bars", fmt: (v) => fmt.pct(v, 2),
+      data: depths.map((p) => { const r = Q.summary.find((x) => x.layers === p && x.penalty_scale === sc); return { x: p, y: r ? r.optimal_probability : null }; }).filter((d) => d.y != null) }));
+    series.push({ name: "XY mixer, no penalty", color: css("s7"), type: "bars", fmt: (v) => fmt.pct(v, 2), data: V.xy_mixer.summary.filter((s) => s.optimal_probability != null).map((s) => ({ x: s.layers, y: s.optimal_probability })) });
+    xy(g, { title: "Chance a shot is the best portfolio", sub: `Mean over decisions. A random bitstring has ${fmt.pct(Q.baselines.uniform_sampling.optimal_probability, 2)}.`, height: 260,
+      x: { kind: "band", cats: depths, fmt: (p) => `p = ${p}`, label: "Circuit depth" }, y: { zero: true, fmt: axis.pct },
+      rules: [{ y: V.xy_mixer.reference_optimal_probability, legend: "Random valid portfolio" }], series });
+    const gates = [{ name: "Penalty QAOA", color: css("s2"), type: "bars", fmt: fmt.int, data: depths.map((p) => { const r = Q.summary.find((x) => x.layers === p && x.two_qubit_gates != null); return { x: p, y: r ? r.two_qubit_gates : null }; }).filter((d) => d.y != null) },
+      { name: "XY mixer", color: css("s7"), type: "bars", fmt: fmt.int, data: V.xy_mixer.summary.filter((s) => s.two_qubit_gates != null).map((s) => ({ x: s.layers, y: s.two_qubit_gates })) }];
+    xy(g, { title: "What feasibility costs in entangling gates", sub: "Two-qubit gates per circuit. The Dicke preparation and the XY mixer add entangling gates; the penalty version spends none on the constraint.", height: 260,
+      x: { kind: "band", cats: depths, fmt: (p) => `p = ${p}`, label: "Circuit depth" }, y: { zero: true, fmt: (v) => fmt.int(v) }, series: gates });
+  }
+
+  if (Q && V.warm_start) {
+    const W = V.warm_start;
+    root.append(el("h2", { text: "Warm starts and parameter transfer across dates" }));
+    root.append(el("p", { class: "lede", text: cap(W.note) + ` Depth ${W.settings.layers}, penalty × ${W.settings.penalty_scale}, ${W.settings.seeds} chain(s) per mode.` }));
+    root.append(el("div", { class: "grid g3" }, W.summary.filter((s) => s.median_total_shots != null).map((s) =>
+      tile(`${cap(s.start)} start`, `${fmt.compact(s.median_total_shots)} shots`, `median per decision; P(optimal) ${fmt.pct(s.optimal_probability, 2)}, optimum found in ${fmt.pct(s.found_optimum_rate, 0)} of runs, ${fmt.secs(s.mean_seconds)}`))));
+    const dcats = Q.decisions.map((d) => d.index);
+    const perDecision = (runs, d) => { const rs = runs.filter((r) => r.decision === d && r.optimal_probability != null); return rs.length ? mean(rs.map((r) => r.optimal_probability)) : null; };
+    const cold = Q.runs.filter((r) => r.layers === W.settings.layers && r.penalty_scale === W.settings.penalty_scale);
+    const modes = [["Cold start", css("s2"), cold, 0], ["Warm start", css("s3"), W.runs.filter((r) => r.mode === "warm"), 1], ["Frozen first-date parameters", css("s4"), W.runs.filter((r) => r.mode === "frozen"), 1]];
+    xy(root.appendChild(el("div", { class: "grid" })), { title: "Chance of the best portfolio, decision by decision", sub: "Warm and frozen chains start at the second date; their first date is a cold start and counts toward their cost.", height: 250,
+      x: { kind: "band", cats: dcats, fmt: decisionDate, minGap: 64, label: "Decision (data cutoff)" }, y: { zero: true, fmt: axis.pct },
+      series: modes.map(([name, color, runs, first]) => ({ name, color, type: "line", markers: true, fmt: (v) => fmt.pct(v, 2), data: dcats.filter((d) => d >= first).map((d) => ({ x: d, y: perDecision(runs, d) })).filter((p) => p.y != null) })) });
+  }
+
+  if (OK.gas_study) {
+    const G = R.gas_study, S = G.summary;
+    root.append(el("h2", { text: "Grover adaptive search" }));
+    root.append(el("p", { class: "lede", text: `Searches only the ${G.search_space} valid portfolios: it starts in their equal superposition and reflects about it. Each Grover step computes the objective into a ${G.settings.value_bits}-qubit two's-complement register with phase arithmetic, marks values below the best so far, and uncomputes. The 1e10-scale integer coefficients are rounded to fit that register, and every returned portfolio is scored on the original objective.` }));
+    root.append(el("div", { class: "grid g4" },
+      tile("Optimum found", fmt.pct(S.found_optimum_rate, 0), `of ${S.runs} runs; mean gap ${fmt.sig(S.mean_gap, 2)}`),
+      tile("Oracle calls per search", fmt.fix(S.mean_oracle_calls, 0), `mean; enumeration needs ${G.baselines.exact_enumeration_evaluations} classical evaluations, √${G.search_space} ≈ ${fmt.fix(G.baselines.sqrt_search_space, 1)}`),
+      tile("Qubits", String(S.qubits), `${S.qubits - G.settings.value_bits} fund qubits plus a ${G.settings.value_bits}-qubit value register`),
+      tile("Gates per Grover step", fmt.int(S.per_rotation_gates), `largest circuit run: ${fmt.int(S.largest_circuit_gates)} gates, depth ${fmt.int(S.largest_circuit_depth)}`)));
+    const dcats = [...new Set(G.runs.map((r) => r.decision))].sort((a, b) => a - b);
+    const done = G.runs.filter((r) => r.status !== "failed");
+    xy(root.appendChild(el("div", { class: "grid" })), { title: "Oracle calls spent by each search", sub: `${G.settings.seeds} search(es) per decision; the stopping rule is ${G.settings.patience} executions without improvement once the rotation range is at its cap.`, height: 250, hover: "point",
+      x: { kind: "band", cats: dcats, fmt: decisionDate, minGap: 64, label: "Decision (data cutoff)" }, y: { zero: true, fmt: (v) => fmt.int(v) },
+      rules: [{ y: G.baselines.exact_enumeration_evaluations, legend: `Exhaustive enumeration (${G.baselines.exact_enumeration_evaluations} classical evaluations)` }], forceLegend: true,
+      series: [{ name: "Found the optimum", color: css("s1"), type: "dots", data: done.filter((r) => r.found_optimum).map((r) => ({ x: r.decision, y: r.oracle_calls, row: r })) },
+        { name: "Missed the optimum", color: css("s8"), type: "dots", data: done.filter((r) => !r.found_optimum).map((r) => ({ x: r.decision, y: r.oracle_calls, row: r })) }],
+      tip: (s, p) => [{ value: fmt.int(p.y), name: "oracle calls" }, { value: fmt.int(p.row.circuit_executions), name: "circuit executions" }, { value: p.row.selected.map(fund).join(", "), name: "returned" }, { value: fmt.sig(p.row.gap, 2), name: "gap" }] });
+    root.append(card("What rounding the objective costs", cap(G.quantization_note) + ".", table([
+      { h: "Value register qubits", n: 1, v: (r) => String(r.value_bits) }, { h: "Decisions", n: 1, v: (r) => String(r.decisions) },
+      { h: "True optimum is a rounded minimizer", n: 1, v: (r) => `${r.true_optimum_kept} / ${r.decisions}` }, { h: "Unique rounded minimizer", n: 1, v: (r) => `${r.unique_minimizer} / ${r.decisions}` },
+      { h: "Worst gap among rounded minimizers", n: 1, v: (r) => fmt.sig(r.worst_gap, 2) }, { h: "Distinct levels (mean)", n: 1, v: (r) => fmt.fix(r.mean_distinct_levels, 1) },
+    ], G.quantization), el("p", { class: "note", text: cap(G.counting_convention) + ". " + cap(G.baselines.note) + "." })));
+  }
+
+  if (OK.relaxation_study) {
+    const X = R.relaxation_study;
+    root.append(el("h2", { text: "Quantum relaxation (SQOA-style)" }));
+    root.append(el("p", { class: "lede", text: `${cap(X.status_note)} The objective is first sparsified to its largest pair terms so that non-interacting funds can share a qubit on different Pauli axes; the relaxed Hamiltonian is diagonalized in the span of sampled configurations; each fund's magnetization is rounded and the K most selected funds are kept. Three numbers are kept apart: the error from sparsifying, the relaxation gap, and the recovered portfolio's gap.` }));
+    const dens = X.summary.map((s) => s.density);
+    const g = el("div", { class: "grid g2" }); root.append(g);
+    xy(g, { title: "Where the answer is lost", sub: "Share of decisions or runs that end at the true optimum. The sparsified problem's own optimum shows what sparsifying alone gives up; the recovered portfolio adds sampling, relaxation and rounding.", height: 260,
+      x: { kind: "band", cats: dens, fmt: (d) => fmt.pct(d, 0), label: "Share of pair terms kept" }, y: { zero: true, max: 1, fmt: axis.pct },
+      series: [{ name: "Sparsified problem's exact optimum", color: css("s1"), type: "bars", fmt: (v) => fmt.pct(v, 0), data: X.summary.map((s) => ({ x: s.density, y: s.approximation_optimum_rate })) },
+        { name: "Recovered portfolio", color: css("s7"), type: "bars", fmt: (v) => fmt.pct(v, 0), data: X.summary.map((s) => ({ x: s.density, y: s.found_optimum_rate })) }] });
+    xy(g, { title: "Qubits used", sub: "Funds that interact cannot share a qubit. With every pair kept each fund needs its own qubit and the encoding is the ordinary diagonal one, where evolution changes no measurement probabilities.", height: 260,
+      x: { kind: "band", cats: dens, fmt: (d) => fmt.pct(d, 0), label: "Share of pair terms kept" }, y: { zero: true, fmt: (v) => fmt.int(v) },
+      series: [{ name: "Largest qubit count", color: css("s7"), type: "bars", fmt: (v) => fmt.int(v), data: X.summary.map((s) => ({ x: s.density, y: s.max_qubits })) }] });
+    root.append(card("Relaxation table", `Validation on all ${X.validation.cases} decision-density cases: encoded product states reproduce the sparsified objective (${X.validation.encoded_states_reproduce_objective ? "yes" : "no"}); the relaxed ground energy is a lower bound (${X.validation.relaxed_ground_energy_is_lower_bound ? "yes" : "no"}).`, table([
+      { h: "Pairs kept", n: 1, v: (s) => `${s.pairs_kept} (${fmt.pct(s.density, 0)})` }, { h: "Max qubits", n: 1, v: (s) => String(s.max_qubits) }, { h: "Diagonal", v: (s) => s.diagonal_encoding ? "yes" : "no" },
+      { h: "Found optimum", n: 1, v: (s) => fmt.pct(s.found_optimum_rate, 0) }, { h: "Mean gap", n: 1, v: (s) => fmt.sig(s.mean_gap, 2) }, { h: "Needed repair", n: 1, v: (s) => fmt.pct(s.repair_rate, 0) },
+      { h: "Sparse opt. = opt.", title: "Share of decisions where the sparsified problem's exact optimum is the true optimum", n: 1, v: (s) => fmt.pct(s.approximation_optimum_rate, 0) }, { h: "Sparsify gap", n: 1, v: (s) => fmt.sig(s.mean_approximation_gap, 2) }, { h: "Relax. gap", n: 1, v: (s) => fmt.sig(s.mean_relaxation_gap, 2) },
+      { h: "Shots", n: 1, v: (s) => fmt.int(s.median_total_shots) }, { h: "Gates", title: "Largest circuit", n: 1, v: (s) => fmt.int(s.largest_circuit_gates) }, { h: "Time", n: 1, v: (s) => fmt.secs(s.mean_seconds) },
+    ], X.summary, { nowrap: true }), el("p", { class: "note", text: cap(X.repair_note) + "." })));
+  }
+}
+
+// ================================================================ Linear algebra
+function linearAlgebra(root) {
+  if (!OK.linear_algebra) return root.append(unavailable("linear_algebra"));
+  const A = R.linear_algebra, labels = [...new Set(A.systems.map((s) => s.label))];
+  const color = (label) => css(FUNDS[labels.indexOf(label) % FUNDS.length]);
+  root.append(el("h2", { text: "Minimum-variance weights from a quantum linear solver" }));
+  root.append(el("p", { class: "lede", text: `Task: minimize wᵀAw subject to 1ᵀw = 1, with A = Σ + δI, solved through A x = 1 and w = x / 1ᵀx. Weights may be negative, so nothing here is sent to the long-only backtester. HHL (phase estimation of exp(iAt)) and a QSVT solver (an odd polynomial close to 1/x applied to a block encoding) run on the same systems. Plan section 12, steps LA0 to LA4.` }));
+  const readoutRows = A.readout.filter((r) => r.median_weight_error != null);
+  const bestReadout = [...readoutRows].sort((a, b) => b.preparations - a.preparations || a.median_weight_error - b.median_weight_error)[0];
+  const covHhl = A.hhl.filter((r) => r.label === A.readout_system);
+  const qsvtRead = A.qsvt.filter((r) => r.label === A.readout_system).sort((a, b) => a.epsilon - b.epsilon)[0];
+  root.append(el("div", { class: "grid g4" },
+    tile("Raw ETF covariance condition number", A.raw_covariance_condition_number == null ? "singular" : fmt.int(A.raw_covariance_condition_number), "too ill-conditioned to solve as is; regularized with δ, which changes the portfolio model"),
+    tile("HHL state error (1 − fidelity)", covHhl.length ? fmt.sig(Math.min(...covHhl.map((r) => r.infidelity)), 2) : "–", covHhl.length ? `regularized ETF system, ${Math.max(...covHhl.map((r) => r.clock_qubits))} clock qubits, success probability ${fmt.pct(covHhl[covHhl.length - 1].success_probability, 2)}` : ""),
+    tile("QSVT state error (1 − fidelity)", qsvtRead ? fmt.sig(qsvtRead.infidelity, 2) : "–", qsvtRead ? `degree-${qsvtRead.polynomial_degree} polynomial, success probability ${fmt.pct(qsvtRead.success_probability, 2)}` : ""),
+    tile("Preparations to read the weights", bestReadout ? fmt.compact(bestReadout.preparations) : "–", bestReadout ? `${bestReadout.method.toUpperCase()}: largest weight error ${fmt.pct(bestReadout.median_weight_error, 1)} (median)` : "")));
+  root.append(card("The systems (LA0)", "Classical reference by Cholesky solve; no explicit inverse is formed.", table([
+    { h: "System", v: (s) => s.label }, { h: "Size", n: 1, v: (s) => `${s.size} (${s.system_qubits} qubits)` }, { h: "Condition number", n: 1, v: (s) => fmt.fix(s.condition_number, 1) },
+    { h: "Eigenvalues", n: 1, v: (s) => `${fmt.sig(s.eigenvalue_min, 3)} to ${fmt.sig(s.eigenvalue_max, 3)}` }, { h: "Negative weights", n: 1, v: (s) => String(s.negative_weights) },
+    { h: "Minimum-variance weights", v: (s) => s.weights.map((w) => fmt.pct(w, 0)).join("  ") },
+  ], A.systems, { nowrap: true })));
+
+  const g = el("div", { class: "grid g2" }); root.append(g);
+  const clocks = [...new Set(A.hhl.map((r) => r.clock_qubits))].sort((a, b) => a - b);
+  xy(g, { title: "HHL: error against phase precision (LA1)", sub: "1 − fidelity of the heralded state with the classical solution, from the simulator statevector. More clock qubits resolve the eigenvalues more finely.", height: 270,
+    x: { kind: "linear", ticks: clocks, fmt: (v) => String(v), label: "Clock qubits" }, y: { kind: "log", fmt: (v) => fmt.sig(v, 1) },
+    series: labels.filter((l) => A.hhl.some((r) => r.label === l)).map((l) => ({ name: l, color: color(l), type: "line", markers: true, fmt: (v) => fmt.sig(v, 2), data: A.hhl.filter((r) => r.label === l).map((r) => ({ x: r.clock_qubits, y: Math.max(r.infidelity, 1e-16) })) })) });
+  const eps = [...new Set(A.qsvt.map((r) => r.epsilon))].sort((a, b) => b - a);
+  xy(g, { title: "QSVT: error at two polynomial accuracies (LA2)", sub: "1 − fidelity, same systems. The polynomial approximates 1/x to the stated relative accuracy on the declared spectral interval.", height: 270,
+    x: { kind: "band", cats: labels, fmt: (l) => l.replace("ETF covariance 8x8, delta = ", "ETF δ=").replace(" x mean variance", "").replace("synthetic ", "").replace(", kappa ", " κ"), tipFmt: (l) => l, minGap: 70, label: "System" }, y: { kind: "log", fmt: (v) => fmt.sig(v, 1) },
+    series: eps.map((e, i) => ({ name: `ε = ${e}`, color: [css("o1"), css("o3")][i % 2], type: "bars", fmt: (v) => fmt.sig(v, 2), data: A.qsvt.filter((r) => r.epsilon === e).map((r) => ({ x: r.label, y: Math.max(r.infidelity, 1e-16) })) })) });
+
+  const kappas = A.sweep.map((r) => r.kappa);
+  const g2 = el("div", { class: "grid g2" }); root.append(g2);
+  xy(g2, { title: "Calls to the matrix oracle against condition number (LA4)", sub: `${A.sweep[0].size}×${A.sweep[0].size} systems with geometric spectra. HHL calls exp(iAt) 2(2ᶜ − 1) times; QSVT calls the block encoding once per polynomial degree.`, height: 260,
+    x: { kind: "band", cats: kappas, fmt: (k) => `κ = ${k}`, label: "Condition number" }, y: { kind: "log" },
+    series: [{ name: "HHL", color: css("s1"), type: "line", markers: true, fmt: fmt.int, data: A.sweep.filter((r) => r.hhl).map((r) => ({ x: r.kappa, y: r.hhl.dense_unitary_calls })) },
+      { name: "QSVT", color: css("s2"), type: "line", markers: true, fmt: fmt.int, data: A.sweep.map((r) => ({ x: r.kappa, y: r.qsvt.dense_unitary_calls })) }] });
+  const sw = A.sweep, firstK = sw[0], lastK = sw[sw.length - 1];
+  const change = (k) => firstK[k] && lastK[k] ? `${fmt.pct(firstK[k].success_probability, 0)} → ${fmt.pct(lastK[k].success_probability, 0)}` : "–";
+  xy(g2, { title: "Success probability against condition number", sub: `Chance that one run heralds the solution. From κ = ${firstK.kappa} to ${lastK.kappa}: HHL ${change("hhl")}, QSVT ${change("qsvt")}. With a uniform right-hand side it depends on how much of it lies along small eigenvalues, not on κ alone.`, height: 260,
+    x: { kind: "band", cats: kappas, fmt: (k) => `κ = ${k}`, label: "Condition number" }, y: { kind: "log", fmt: (v) => fmt.pct(v, v < 0.01 ? 1 : 0) },
+    series: [{ name: "HHL", color: css("s1"), type: "line", markers: true, fmt: (v) => fmt.pct(v, 2), data: A.sweep.filter((r) => r.hhl).map((r) => ({ x: r.kappa, y: r.hhl.success_probability })) },
+      { name: "QSVT", color: css("s2"), type: "line", markers: true, fmt: (v) => fmt.pct(v, 2), data: A.sweep.map((r) => ({ x: r.kappa, y: r.qsvt.success_probability })) }] });
+
+  root.append(card("Separating HHL's error sources", "Eigenvalues that sit exactly on the clock grid remove phase-estimation error; Trotterized evolution then adds a Hamiltonian-simulation error of its own.", table([
+    { h: "Case", v: (r) => r.case }, { h: "Clock qubits", n: 1, v: (r) => String(r.clock_qubits) }, { h: "1 − fidelity", n: 1, v: (r) => fmt.sig(Math.max(r.infidelity, 0), 2) },
+    { h: "Success probability", n: 1, v: (r) => fmt.pct(r.success_probability, 2) }, { h: "Gates", n: 1, v: (r) => fmt.int(r.gates) }, { h: "Depth", n: 1, v: (r) => fmt.int(r.depth) }, { h: "Pauli terms", n: 1, v: (r) => r.pauli_terms == null ? "–" : String(r.pauli_terms) },
+  ], A.hhl_controls, { nowrap: true })));
+
+  root.append(el("h2", { text: "Getting numbers out of the solution state (LA3)" }));
+  root.append(el("p", { class: "lede", text: `A solver leaves a state proportional to A⁻¹1; it does not print x. Weights are recovered from counts only: one computational-basis setting for magnitudes, and one setting per system qubit with a Hadamard for relative signs. Every preparation is counted, failed heralds included. A single scalar, 1ᵀA⁻¹1, needs one setting. System: ${A.readout_system}.` }));
+  const g3 = el("div", { class: "grid g2" }); root.append(g3);
+  const methodsR = [["hhl", "HHL", css("s1")], ["qsvt", "QSVT", css("s2")]];
+  const readSeries = [];
+  for (const [k, name, c] of methodsR) {
+    readSeries.push({ name: `${name}: largest weight error`, color: c, type: "line", markers: true, fmt: (v) => fmt.pct(v, 2), data: readoutRows.filter((r) => r.method === k).map((r) => ({ x: r.preparations, y: r.median_weight_error })) });
+    readSeries.push({ name: `${name}: scalar 1ᵀA⁻¹1, relative error`, color: c, dash: "5 5", type: "line", fmt: (v) => fmt.pct(v, 2), data: A.readout.filter((r) => r.method === k && r.median_scalar_error != null).map((r) => ({ x: r.scalar_preparations, y: r.median_scalar_error })) });
+  }
+  xy(g3, { title: "Readout error against preparations", sub: "Median over trials. Errors fall as one over the square root of preparations, so each extra digit costs about 100 times more.", height: 280, hover: "point",
+    x: { kind: "log", label: "State preparations" }, y: { kind: "log", fmt: (v) => fmt.pct(v, v < 0.01 ? 1 : 0) }, series: readSeries,
+    tip: (s, p) => [{ value: fmt.pct(p.y, 2), name: s.name }, { value: fmt.int(p.x), name: "preparations" }] });
+  const ref = A.readout_reference_weights, idx = ref.map((_, i) => i);
+  const largest = (k) => readoutRows.filter((r) => r.method === k).sort((a, b) => b.preparations - a.preparations)[0];
+  const wSeries = [{ name: "Classical solution", color: css("neutral"), type: "bars", fmt: (v) => fmt.pct(v, 1), data: idx.map((i) => ({ x: i, y: ref[i] })) }];
+  for (const [k, name, c] of methodsR) { const r = largest(k); if (r && r.example_weights) wSeries.push({ name: `${name}, ${fmt.compact(r.preparations)} preparations`, color: c, type: "bars", fmt: (v) => fmt.pct(v, 1), data: idx.map((i) => ({ x: i, y: r.example_weights[i] })) }); }
+  xy(g3, { title: "Recovered weights, one trial", sub: "Weights formed from the measured vector, against the classical minimum-variance weights.", height: 280,
+    x: { kind: "band", cats: idx, fmt: (i) => A.symbols[i] || String(i), label: "Fund" }, y: { zero: true, fmt: axis.pct }, series: wSeries });
+  root.append(card("Readout table", null, table([
+    { h: "Method", v: (r) => r.method.toUpperCase() }, { h: "Shots per setting", n: 1, v: (r) => fmt.int(r.shots_per_setting) }, { h: "Settings", n: 1, v: (r) => String(r.settings) },
+    { h: "Preparations", n: 1, v: (r) => fmt.int(r.preparations) }, { h: "Success probability", n: 1, v: (r) => fmt.pct(r.success_probability, 2) },
+    { h: "Largest weight error", n: 1, v: (r) => r.median_weight_error == null ? "–" : fmt.pct(r.median_weight_error, 2) }, { h: "Variance excess", n: 1, v: (r) => r.median_variance_excess == null ? "–" : fmt.pct(r.median_variance_excess, 2) },
+    { h: "Residual", n: 1, v: (r) => r.median_residual == null ? "–" : fmt.sig(r.median_residual, 2) }, { h: "Sign errors", n: 1, v: (r) => r.median_sign_errors == null ? "–" : fmt.fix(r.median_sign_errors, 1) },
+    { h: "Largest flipped weight", n: 1, title: "Median over trials of the largest true weight (in absolute value) whose sign came out wrong", v: (r) => r.median_largest_flipped_weight == null ? "–" : fmt.pct(r.median_largest_flipped_weight, 1) },
+    { h: "Failed trials", n: 1, v: (r) => `${r.failed_trials} / ${r.trials}` }, { h: "Scalar error", n: 1, v: (r) => r.median_scalar_error == null ? "–" : fmt.pct(r.median_scalar_error, 2) },
+  ], A.readout, { nowrap: true }), el("p", { class: "note", text: "Largest weight error is the largest absolute difference from the classical weights. Variance excess is how much more variance the recovered weights carry than the true minimum. Weights always sum to one by construction; a sign error flips a long position to a short one, and the largest flipped weight shows whether that happened only to weights within the readout error of zero." })));
+  root.append(card("Regularization changes the problem it makes solvable", "δ as a multiple of the mean variance. A larger δ lowers the condition number, and so the clock qubits HHL needs, but pulls the weights toward equal weighting.", table([
+    { h: "δ / mean variance", n: 1, v: (r) => fmt.sig(r.delta_fraction, 2) }, { h: "Condition number", n: 1, v: (r) => fmt.fix(r.condition_number, 1) }, { h: "Negative weights", n: 1, v: (r) => String(r.negative_weights) },
+    { h: "Largest |weight|", n: 1, v: (r) => fmt.pct(r.largest_weight, 1) }, { h: "HHL clock qubits", n: 1, v: (r) => String(r.hhl_clock_qubits) },
+  ], A.regularization)));
+  root.append(card("Disclosures", cap(A.evidence_label) + ".", el("ul", { class: "plain" }, A.disclosures.map((d) => el("li", { text: d })))));
+}
+
+// ================================================================ Sampling
+let spectralSize = null;
+function sampling(root) {
+  if (!OK.mcmc_study && !OK.spectral_study) return root.append(unavailable("mcmc_study"));
+  if (OK.mcmc_study) mcmc(root); else root.append(unavailable("mcmc_study"));
+  if (OK.spectral_study) spectral(root); else root.append(unavailable("spectral_study"));
+}
+
+function mcmc(root) {
+  const M = R.mcmc_study, E = M.exact, P = M.quantum_proposal, rows = M.samplers;
+  const sectors = new Set(M.settings.sectors).size;
+  root.append(el("h2", { text: "Quantum-assisted scenario sampling" }));
+  root.append(el("p", { class: "lede", text: `A specified credit testbed (plan section 13.2): ${E.names} names in ${sectors} sectors whose defaults are coupled, at inverse temperature β = ${E.beta}. The event "${M.model.tail_event}" has probability ${fmt.pct(E.tail_probability, 2)}. The target is frozen and enumerated exactly (${E.states} states), so every sampler is scored against the true distribution. The quantum circuit only proposes a move; acceptance is classical.` }));
+  const q = rows.find((r) => r.sampler === "quantum"), classical = rows.filter((r) => r.sampler !== "quantum");
+  // A stuck chain can show a short autocorrelation time; only chains consistent with the target compete.
+  const valid = classical.filter((r) => r.consistent_with_target);
+  const bestClassical = [...(valid.length ? valid : classical)].sort((a, b) => b.effective_samples_per_1000_updates - a.effective_samples_per_1000_updates)[0];
+  root.append(el("div", { class: "grid g4" },
+    tile("Exact tail probability", fmt.pct(E.tail_probability, 2), `largest single state holds ${fmt.pct(E.largest_state_probability, 1)}`),
+    tile("Quantum proposal symmetric", P.symmetric ? "yes" : "no", `largest asymmetry ${fmt.sig(P.largest_asymmetry, 1)} over ${P.settings_averaged} settings, so plain Metropolis keeps the target`),
+    tile("Effective samples per 1,000 updates", q ? fmt.fix(q.effective_samples_per_1000_updates, 1) : "–", `quantum proposal; best classical sampler that matches the target: ${fmt.fix(bestClassical.effective_samples_per_1000_updates, 1)} (${SAMPLER[bestClassical.sampler][0]})`),
+    tile("Simulator time per chain", q ? fmt.secs(q.seconds_per_chain) : "–", `quantum, about ${q ? fmt.int(q.mean_gates_per_proposal) : "–"} gates per proposal; classical chains take ${fmt.secs(median(classical.map((r) => r.seconds_per_chain)))}`)));
+  const g = el("div", { class: "grid g2" }); root.append(g);
+  const kinds = ["local", "uniform", "gibbs", "quantum"];
+  xy(g, { title: "Spectral gap of each chain, by temperature", sub: "Exact, from each transition matrix. A larger gap mixes faster. The quantum proposal matrix comes from simulator statevectors (privileged access).", height: 270,
+    x: { kind: "band", cats: M.gaps.map((r) => r.beta), fmt: (b) => `β = ${b}`, label: "Inverse temperature" }, y: { kind: "log", fmt: (v) => fmt.sig(v, 1) },
+    series: kinds.map((k) => ({ name: SAMPLER[k][0], color: SAMPLER[k][1], type: "line", markers: true, fmt: (v) => fmt.sig(v, 3), data: M.gaps.map((r) => ({ x: r.beta, y: Math.max(r[k], 1e-12) })) })) });
+  xy(g, { title: "Distance from the target as chains run", sub: `Total variation distance of each sampler's chain so far, averaged over ${M.settings.chains} chains started half from "nobody defaults" and half from "everybody defaults". Dashed: the same number of independent exact draws.`, height: 270,
+    x: { kind: "log", label: "Chain steps" }, y: { zero: true, max: 1, fmt: axis.pct },
+    series: [...rows.map((r) => ({ name: SAMPLER[r.sampler][0], color: SAMPLER[r.sampler][1], type: "line", fmt: (v) => fmt.pct(v, 1), data: M.checkpoints.map((c, i) => ({ x: c, y: r.tv_curve[i] })) })),
+      { name: "Independent draws", color: css("neutral"), dash: "5 5", type: "line", fmt: (v) => fmt.pct(v, 1), data: M.checkpoints.map((c, i) => ({ x: c, y: M.independent_sample_tv[i] })) }] });
+  root.append(card("Sampler table", `${M.settings.steps.toLocaleString("en-US")} steps per chain, ${M.settings.burn_in} discarded as burn-in. Effective samples use the integrated autocorrelation time of the number of defaults.`, table([
+    { h: "Sampler", v: (r) => SAMPLER[r.sampler][0] }, { h: "Acceptance", n: 1, v: (r) => fmt.pct(r.acceptance_rate, 1) }, { h: "Autocorr. time", n: 1, v: (r) => r.autocorrelation_time == null ? "–" : fmt.fix(r.autocorrelation_time, 1) },
+    { h: "Stuck chains", n: 1, v: (r) => String(r.stuck_chains) }, { h: "Eff. samples / 1,000 updates", n: 1, v: (r) => fmt.fix(r.effective_samples_per_1000_updates, 1) }, { h: "Eff. samples / s", n: 1, v: (r) => fmt.sig(r.effective_samples_per_second, 3) },
+    { h: "Tail estimate", n: 1, v: (r) => fmt.pct(r.tail_estimate_mean, 2) }, { h: "Tail error", n: 1, v: (r) => fmt.pct(r.tail_mean_abs_error, 2) }, { h: "Final TV", n: 1, v: (r) => fmt.pct(r.pooled_total_variation, 1) },
+    { h: "Matches target", title: "Pooled tail estimate within three standard errors of the exact value", v: (r) => r.pooled_tail_z_score == null ? "–" : `${r.consistent_with_target ? "yes" : "no"} (z = ${fmt.fix(r.pooled_tail_z_score, 1)})` }, { h: "Time / chain", n: 1, v: (r) => fmt.secs(r.seconds_per_chain) },
+  ], rows, { nowrap: true }), el("p", { class: "note", text: `"Matches target" means the pooled tail estimate lies within three standard errors of the exact value, using the effective sample size. Parallel tempering counts every replica's update. ${cap(M.cost_note)}.` })));
+}
+
+function spectral(root) {
+  const S = R.spectral_study, sizes = [...new Set(S.rows.map((r) => r.requested_size))].sort((a, b) => a - b);
+  if (!spectralSize || !sizes.includes(spectralSize)) spectralSize = sizes.includes(8) ? 8 : sizes[0];
+  root.append(el("h2", { text: "Covariance spectra by sample-based diagonalization" }));
+  root.append(el("p", { class: "lede", text: `Output fixed in advance: the largest eigenvalue and the leading risk factor (plan section 13.3). Each method picks m asset coordinates and diagonalizes that sub-block of the covariance; they differ only in how the coordinates are picked. SQD samples them from a trial state, SKQD from that state evolved for ${S.krylov_times.length - 1} increasing times. Two classical competitors pick coordinates too: the m largest variances, and ${S.power_iteration_note || "power iteration"}. ${cap(S.bound_note)}.` }));
+  root.append(card("The covariance families and the classical references", cap(S.output_note) + ".", table([
+    { h: "Family", v: (r) => r.family }, { h: "Assets", n: 1, v: (r) => `${r.assets} (${r.qubits} qubits)` }, { h: "Gap λ₁/λ₂", n: 1, v: (r) => fmt.fix(r.gap_ratio, 2) },
+    { h: "Variance explained", n: 1, v: (r) => fmt.pct(r.explained_variance, 0) }, { h: "Coordinates for 90%", n: 1, v: (r) => String(r.coordinates_for_90_percent) },
+    { h: "Lanczos mat-vecs", n: 1, v: (r) => String(r.lanczos_matrix_vector_products) }, { h: "Randomized error", n: 1, v: (r) => fmt.sig(r.randomized_eigenvalue_error, 1) },
+  ], S.references, { nowrap: true })));
+  const controls = el("div", { class: "controls" }, el("label", { text: "Subspace size m" }));
+  const seg = el("div", { class: "seg", role: "group", "aria-label": "Subspace size" });
+  for (const m of sizes) seg.append(el("button", { type: "button", "aria-pressed": String(spectralSize === m), text: String(m), onclick: () => { spectralSize = m; render("sampling"); } }));
+  controls.append(seg); root.append(controls);
+  const at = S.rows.filter((r) => r.requested_size === spectralSize);
+  const fams = [...new Set(at.map((r) => r.family))], methods = [...new Set(at.map((r) => r.method))];
+  const MCOLOR = { "largest variances (classical)": css("s1"), "power iteration (classical)": css("s6"), "SQD, uniform start": css("s4"), "SKQD, uniform start": css("s2"), "SKQD, volatility start": css("s3") };
+  const series = methods.map((mth) => ({ name: mth, color: MCOLOR[mth] || css("neutral"), type: "bars", fmt: (v) => fmt.pct(v, 1), data: fams.map((f) => { const r = at.find((x) => x.family === f && x.method === mth); return { x: f, y: r ? r.vector_error : null }; }).filter((d) => d.y != null) }));
+  series.push({ name: "Best any m coordinates can do", color: css("ink"), type: "tick", fmt: (v) => fmt.pct(v, 1), data: fams.map((f) => ({ x: f, y: at.find((x) => x.family === f).best_possible_vector_error })) });
+  xy(root.appendChild(el("div", { class: "grid" })), { title: `Leading-factor error with m = ${spectralSize} coordinates`, sub: `1 − squared overlap with the true leading eigenvector; median over ${S.settings.seeds} seeds; ${S.settings.shots} shots per circuit. Lower is better.`, height: 280,
+    x: { kind: "band", cats: fams, fmt: (f) => f.replace(/ \(.*\)/, ""), tipFmt: (f) => f, label: "Covariance family" }, y: { zero: true, max: 1, fmt: axis.pct }, series });
+  const g = el("div", { class: "grid g2" }); root.append(g);
+  xy(g, { title: `Spectral gap: ${S.probe_family}`, sub: `m = ${S.settings.probe.subspace_size}. Gap set by scaling the first sector's volatility.`, height: 250,
+    x: { kind: "linear", label: "Gap λ₁/λ₂", fmt: (v) => fmt.fix(v, 1) }, y: { zero: true, max: 1, fmt: axis.pct },
+    series: [{ name: "SKQD, uniform start", color: css("s2"), type: "line", markers: true, fmt: (v) => fmt.pct(v, 1), data: S.gap_sweep.map((r) => ({ x: r.gap_ratio, y: r.skqd.vector_error })) },
+      { name: "Largest variances (classical)", color: css("s1"), type: "line", markers: true, fmt: (v) => fmt.pct(v, 1), data: S.gap_sweep.map((r) => ({ x: r.gap_ratio, y: r.classical.vector_error })) },
+      ...(S.gap_sweep[0].power ? [{ name: "Power iteration (classical)", color: css("s6"), type: "line", markers: true, dash: "5 5", fmt: (v) => fmt.pct(v, 1), data: S.gap_sweep.map((r) => ({ x: r.gap_ratio, y: r.power.vector_error })) }] : [])] });
+  g.append(card("Shots and evolution", `${S.probe_family}, m = ${S.settings.probe.subspace_size}. Trotter evolution replaces the dense unitary with Pauli rotations.`, table([
+    { h: "Setting", v: (r) => r.label }, { h: "Leading-factor error", n: 1, v: (r) => fmt.pct(r.vector_error, 1) }, { h: "Eigenvalue error", n: 1, v: (r) => fmt.pct(r.eigenvalue_error, 1) },
+    { h: "Total shots", n: 1, v: (r) => fmt.int(r.total_shots) }, { h: "Largest circuit", n: 1, v: (r) => fmt.int(r.largest_circuit_gates) },
+  ], [...S.shot_sweep.map((r) => ({ ...r, label: `${r.shots_per_circuit} shots per circuit` })), ...S.evolution.map((r) => ({ ...r, label: r.evolution }))], { nowrap: true })));
+  root.append(card("Disclosures", cap(S.evidence_label) + ".", el("ul", { class: "plain" }, S.disclosures.map((d) => el("li", { text: d })))));
+}
+
+// ================================================================ Learning
+function learning(root) {
+  if (!OK.kernel_study && !OK.generative_study) return root.append(unavailable("kernel_study"));
+  if (OK.kernel_study) kernels(root); else root.append(unavailable("kernel_study"));
+  if (OK.generative_study) generative(root); else root.append(unavailable("generative_study"));
+}
+
+function kernels(root) {
+  const K = R.kernel_study, D = K.data, C = K.cost;
+  root.append(el("h2", { text: "Regime prediction with a quantum kernel" }));
+  root.append(el("p", { class: "lede", text: `Predict whether ${D.label} (plan section 14, item 6). Features: ${D.features.join(", ")}, all from past returns of the ${D.series}. Examples are split by date into training (to ${fmt.date(D.train_last_session)}), validation and test (from ${fmt.date(D.test_first_session)}), with ${D.purged_per_boundary} examples purged at each boundary because labels look forward. Each kernel gets a hyperparameter grid chosen on validation; the test block is used once.` }));
+  const all = [...K.rows.map((r) => ({ ...r, kind: r.method.startsWith("quantum") ? "quantum" : "classical" })), ...K.baselines.map((r) => ({ ...r, kind: "baseline" }))];
+  const cats = all.map((_, i) => i);
+  const shortName = (m) => m.replace("quantum fidelity kernel", "Quantum kernel").replace(", sampled", " (sampled)").replace("always the training majority class", "Majority class").replace(/persistence:.*/, "Persistence").replace(" kernel", "");
+  const kindSeries = [["quantum", "Quantum kernel (CUDA-Q)", css("s2")], ["classical", "Classical kernel", css("s1")], ["baseline", "Simple baseline", css("s3")]];
+  xy(root.appendChild(el("div", { class: "grid" })), { title: "Test accuracy with 95% intervals", sub: `${D.examples.test} test examples, ${fmt.pct(D.test_positive_share, 0)} of them high-volatility. Intervals are Wilson score intervals.`, height: 270, noOffset: true,
+    x: { kind: "band", cats, fmt: (i) => cap(shortName(all[i].method)), tipFmt: (i) => all[i].method, minGap: 80 }, y: { min: 0, max: 1, fmt: axis.pct },
+    rules: [{ y: 0.5, legend: "Coin flip" }],
+    series: kindSeries.map(([kind, name, color]) => ({ name, color, type: "range", fmt: (v) => fmt.pct(v, 0), data: all.map((r, i) => ({ r, i })).filter((o) => o.r.kind === kind).map((o) => ({ x: o.i, y: o.r.accuracy, lo: o.r.ci_low, hi: o.r.ci_high })) })) });
+  root.append(card("Kernel table", cap(K.limits) + ".", table([
+    { h: "Method", v: (r) => r.method }, { h: "Chosen settings", v: (r) => r.settings ? Object.entries(r.settings).map(([k, v]) => `${k} ${v}`).join(", ") : "–" },
+    { h: "Candidates", n: 1, v: (r) => r.candidates_tried ? String(r.candidates_tried) : "–" }, { h: "Validation", n: 1, v: (r) => r.validation_accuracy == null ? "–" : fmt.pct(r.validation_accuracy, 0) },
+    { h: "Test", n: 1, v: (r) => `${fmt.pct(r.accuracy, 0)} [${fmt.pct(r.ci_low, 0)}, ${fmt.pct(r.ci_high, 0)}]` }, { h: "Mean kernel", title: "Mean off-diagonal kernel value on the training set; near 1 means examples look alike to the kernel", n: 1, v: (r) => r.mean_off_diagonal_kernel == null ? "–" : fmt.fix(r.mean_off_diagonal_kernel, 2) },
+    { h: "Kernel source", v: (r) => r.kernel_source || "–" },
+  ], all, { nowrap: true })));
+  root.append(el("div", { class: "grid g3" },
+    tile("Circuits to build the kernels", fmt.int(C.train_pair_circuits + C.test_pair_circuits), `${fmt.int(C.train_pair_circuits)} for training, ${fmt.int(C.test_pair_circuits)} for testing; ${C.qubits} qubits, ${C.pair_circuit_gates} gates each`),
+    tile("Shots", fmt.compact(C.total_shots), `${C.shots_per_circuit} per circuit; sampled kernel differs from the exact one by up to ${fmt.fix(C.sampled_kernel_max_error, 2)}`),
+    tile("At 10,000 examples", `~${fmt.compact(10000 * 9999 / 2)} circuits`, cap(C.scaling))));
+}
+
+function generative(root) {
+  const G = R.generative_study, D = G.data, B = G.born_machine;
+  root.append(el("h2", { text: "A quantum generative model for daily returns" }));
+  root.append(el("p", { class: "lede", text: `A ${B.qubits}-qubit circuit Born machine (plan section 14, item 8) learns the histogram of daily basket returns in ${D.bins} bins, fitted on ${D.train_sessions} sessions to ${fmt.date(D.train_last_session)} and judged on the following ${D.test_sessions}. The criteria were fixed first: held-out cross-entropy and total variation, and the probability of a daily loss beyond ${fmt.pct(-D.tail_threshold, 2)}.` }));
+  const idx = D.bin_centres.map((_, i) => i);
+  const pick = (name) => G.rows.find((r) => r.model === name);
+  const lines = [["normal", css("s1")], ["Student t", css("s3")], ["quantum circuit Born machine", css("s2")]].filter(([n]) => pick(n));
+  xy(root.appendChild(el("div", { class: "grid" })), { title: "Held-out returns against the fitted models", sub: "Bars: the later, unseen sessions. Lines: probability each model puts on each bin. Both tails are folded into the end bins.", height: 280,
+    x: { kind: "band", cats: idx, fmt: (i) => fmt.pct(D.bin_centres[i], 1), minGap: 52, label: "Daily return (bin centre)" }, y: { zero: true, fmt: axis.pct },
+    series: [{ name: "Held-out sessions", color: css("neutral"), type: "bars", fmt: (v) => fmt.pct(v, 1), data: idx.map((i) => ({ x: i, y: G.test_histogram[i] })) },
+      ...lines.map(([n, c]) => ({ name: cap(n), color: c, type: "line", markers: true, fmt: (v) => fmt.pct(v, 1), data: idx.map((i) => ({ x: i, y: pick(n).probabilities[i] })) }))] });
+  root.append(card("Model table", `Held-out entropy floor (the held-out histogram scored against itself): ${fmt.fix(G.test_entropy_floor, 3)} nats. Realized tail frequency: ${fmt.pct(G.realized_tail_probability, 1)}; realized 95% VaR bin: ${fmt.pct(G.realized_var_95, 2)}.`, table([
+    { h: "Model", v: (r) => cap(r.model) }, { h: "Parameters", n: 1, v: (r) => fmt.int(r.parameters) }, { h: "Held-out cross-entropy", n: 1, v: (r) => fmt.fix(r.test_cross_entropy, 3) },
+    { h: "Training cross-entropy", n: 1, v: (r) => fmt.fix(r.train_cross_entropy, 3) }, { h: "Held-out TV", n: 1, v: (r) => fmt.pct(r.test_total_variation, 1) },
+    { h: "Tail probability", n: 1, v: (r) => fmt.pct(r.tail_probability, 1) }, { h: "Tail error", n: 1, v: (r) => fmt.pct(r.tail_error, 1) }, { h: "95% VaR bin", n: 1, v: (r) => fmt.pct(r.var_95, 2) },
+  ], G.rows, { nowrap: true }), el("p", { class: "note", text: cap(G.limits) + "." })));
+  root.append(el("div", { class: "grid g3" },
+    tile("Circuit", `${B.parameters} parameters`, `${B.layers} layers, ${B.gates} gates, depth ${B.depth}`),
+    tile("Training cost", `${fmt.int(B.circuit_evaluations)} evaluations`, `over ${B.restarts} restarts; on a device about ${fmt.compact(B.device_shots_estimate)} shots at ${fmt.int(B.shots_per_evaluation_assumed)} per evaluation`),
+    tile("Tail from circuit samples", fmt.pct(B.sampled_tail_probability, 1), `${fmt.int(B.samples_drawn)} samples drawn as a device would; realized ${fmt.pct(G.realized_tail_probability, 1)}`)));
+  root.append(el("p", { class: "note", text: cap(B.training_note) + "." }));
+}
+
 // ================================================================ Reproduce
 function reproduce(root) {
   const Mf = DATA.manifest, env = Mf.environment;
@@ -817,7 +1218,8 @@ function reproduce(root) {
 }
 
 // ================================================================ shell
-const TABS = [["overview", "Overview", overview], ["risk", "Risk lab", riskLab], ["portfolio", "Portfolio", portfolio], ["qaoa", "QAOA search", qaoa], ["forecasts", "Risk forecasts", forecasts], ["reproduce", "Reproduce", reproduce]];
+const TABS = [["overview", "Overview", overview], ["risk", "Risk lab", riskLab], ["portfolio", "Portfolio", portfolio], ["qaoa", "QAOA search", qaoa], ["variants", "Search variants", searchVariants], ["forecasts", "Risk forecasts", forecasts],
+  ["linalg", "Linear algebra", linearAlgebra], ["sampling", "Sampling", sampling], ["learning", "Learning", learning], ["reproduce", "Reproduce", reproduce]];
 const main = document.getElementById("main"), tabs = document.getElementById("tabs");
 let current = "overview";
 function render(id) {

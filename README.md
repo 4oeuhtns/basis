@@ -30,10 +30,12 @@ qflab/                    Python research code
 ├── optimizer_worker.py   Exact portfolio selection (answers the Rust backtester)
 ├── qaoa_worker.py        QAOA portfolio selection on CUDA-Q (same protocol)
 ├── lab.py                Experiment runner: one config in, one run directory out
-├── problems/             Canonical expectation problems shared by every estimator
-├── methods/              Classical estimators, IQAE, QAOA search, swap search (no SDK imports)
-├── backends/             CUDA-Q kernels and simulator targets; the only SDK-specific module
-├── experiments/          Risk lab, QAOA study, paired backtests, risk forecasts, metrics
+├── circuit.py            SDK-free gate lists for the research circuits, plus a NumPy reference simulator
+├── problems/             Expectation problems (call, two-factor book, Asian call) and linear systems
+├── methods/              IQAE, MLAE, QAOA (penalty and XY mixer), Grover search, HHL, QSVT, MCMC,
+│                         SQD/SKQD, quantum relaxation, kernels, Born machine, classical baselines
+├── backends/             CUDA-Q kernels, targets and the circuit runner; the only SDK-specific code
+├── experiments/          Risk lab, QAOA study, paired backtests, forecasts, research-track studies
 ├── ui/                   Tearsheet builder and its HTML template
 └── qaoa.py               QUBO construction and checks; optional Classiq export
 configs/                  Experiment recipes
@@ -238,7 +240,7 @@ Run everything, then open the report:
 open runs/lab/<run id>/tearsheet.html
 ```
 
-A full run takes about nine minutes on this machine. It writes one directory under `runs/lab/` containing `config.json`, `manifest.json` (code commit, versions, seed, timings, the status of each section), `results.json`, the backtests it launched, and `tearsheet.html`. To rerun one part and copy the rest from an earlier run:
+A full run takes about 40 minutes on this machine, most of it simulating Grover-search, QAOA and MCMC circuits on a CPU. The four core sections alone (`--only risk_lab,portfolio,qaoa_study,risk_forecast`) take 20 to 30 minutes, depending on what else the machine is doing. A run writes one directory under `runs/lab/` containing `config.json`, `manifest.json` (code commit, versions, seed, timings, the status of each section), `results.json`, the backtests it launched, and `tearsheet.html`. To rerun one part and copy the rest from an earlier run:
 
 ```sh
 .tools/cudaq-venv/bin/python -m qflab.lab run configs/lab.json --only risk_lab --reuse runs/lab/<earlier run>
@@ -247,7 +249,7 @@ A full run takes about nine minutes on this machine. It writes one directory und
 
 ### The tearsheet
 
-`tearsheet.html` is a single file with no network dependencies. It has six tabs:
+`tearsheet.html` is a single file with no network dependencies. It has ten tabs:
 
 | Tab | What it shows |
 | --- | --- |
@@ -255,7 +257,11 @@ A full run takes about nine minutes on this machine. It writes one directory und
 | Risk lab | The call price by every method, error and interval width against work, circuit resources, grid size, strikes, and noise |
 | Portfolio | Equity, drawdown, and metrics for exact selection, QAOA, and an equal-weight benchmark; a switch between the exact and QAOA runs for holdings and the decision log |
 | QAOA search | Feasible and optimal probability by circuit depth and penalty, against enumeration, a swap search, and random bitstrings |
+| Search variants | Every search method on the same decisions: constraint-preserving QAOA, warm starts across dates, Grover adaptive search, and the quantum relaxation |
 | Risk forecasts | Loss-probability forecasts for the portfolios actually targeted, by normal CDF, exact discrete sum, Monte Carlo, and IQAE |
+| Linear algebra | HHL and QSVT on small covariance systems: state error against precision and condition number, and what reading out the weights costs |
+| Sampling | Quantum-assisted MCMC against classical samplers on a known target; SQD/SKQD for the leading risk factor against classical coordinate choices |
+| Learning | A quantum-kernel regime classifier against tuned classical kernels; a quantum Born machine against classical density models |
 | Reproduce | Run record, environment, section statuses, backtest directories, and a button to download the configuration |
 
 Charts show values on hover, and each has a data table underneath. The page follows the system light or dark theme and has a toggle. Appending `?theme=dark` to the address forces a theme.
@@ -287,6 +293,18 @@ With the committed configuration (32 price bins, 30 seeds per budget) the run fo
 
 IQAE needed fewer queries than Monte Carlo for the same error, as theory predicts. Its deepest circuit at that budget had about 98,000 gates, which only an ideal simulator can run. A stronger classical method, Sobol, beat both, and the 32-point grid is itself $0.073 away from Black–Scholes. A call option has a closed form: it is a verification problem for the machinery, not a case for quantum advantage.
 
+**MLAE** (maximum-likelihood amplitude estimation) runs the same circuits with Grover powers 0, 1, 2, 4, … fixed in advance and fits one likelihood to all of them. With 9 circuits (powers up to 128, about 52,000 state-preparation calls) its median error was $0.004, close to IQAE's at a similar budget; its likelihood-ratio intervals covered the target in 87–100% of seeds, because their coverage is only asymptotic.
+
+The risk lab also prices three harder problems with no one-line closed form, using a scrambled Sobol estimate as the continuous reference. At the same work, Monte Carlo's median error was 3 to 10 times IQAE's:
+
+| Problem (6 scenario qubits) | Grid vs continuous | IQAE error | MLAE error | Monte Carlo error, same work as IQAE |
+| --- | --- | --- | --- | --- |
+| P(loss > 4%), two correlated factors and a short call | 28.6% vs 25.4% | 0.06 pts | 0.04 pts | 0.58 pts |
+| Expected loss beyond 4%, same book | 0.94% vs 0.92% | 0.007 pts | 0.004 pts | 0.020 pts |
+| Asian call on the average of 3 dates | $7.20 vs $6.67 | $0.023 | $0.016 | $0.095 |
+
+For the loss probability and the Asian call, as for the plain call, the grid itself is further from the continuous model than any estimator is from the grid. For the expected excess loss the two are similar in size.
+
 A separate noise study adds depolarizing error after two-qubit gates. At a 0.2% error rate, IQAE's intervals contained the right answer in about half of the runs instead of 95%, while staying just as narrow.
 
 ### QAOA inside the backtest
@@ -313,17 +331,40 @@ One QAOA decision works like this:
 
 The worker also enumerates the true optimum and reports the gap. That answer key is never used to choose. Frozen QAOA answers replay without Python or a simulator, exactly like exact ones.
 
-On the 2025 data, QAOA returned the enumerated optimum at all 13 decisions, so the two backtests are identical to the cent. The difference is cost: about 210,000 circuit shots and 6.5 seconds per decision, against 56 evaluations and about 30 milliseconds for enumeration. With eight funds there are only 56 valid portfolios, and keeping the best of 2,048 *random* bitstrings would also find the optimum 99.97% of the time. This size tests correctness and integration. It cannot show a speed advantage.
+On the 2025 data, QAOA returned the enumerated optimum at all 13 decisions, so the two backtests are identical to the cent. The difference is cost: about 210,000 circuit shots and 6 to 20 seconds of simulation per decision (depending on what else the machine is doing), against 56 evaluations and 30 to 60 milliseconds for enumeration. With eight funds there are only 56 valid portfolios, and keeping the best of 2,048 *random* bitstrings would also find the optimum 99.97% of the time. This size tests correctness and integration. It cannot show a speed advantage.
 
 `penalty_scale` multiplies the provably sufficient penalty. At `"1"` every invalid selection scores worse than every valid one. Smaller values are a declared experiment: the QAOA study shows a ten-times weaker penalty raises the chance that a shot is the best portfolio from about 1% to about 5% at depth 3, while the feasibility guarantee is lost and has to be enforced by the independent check in step 3.
+
+The same decisions are also searched with a constraint-preserving mixer, with warm starts, with Grover adaptive search and with a quantum relaxation; see "Research tracks" below.
 
 ### Risk forecasts
 
 For each saved decision, the lab asks: under the return model fitted at the cutoff, what is the probability that the target portfolio loses more than 5% over the next 21 sessions? It answers with a normal CDF, the exact discrete sum, Monte Carlo, and IQAE, and then shows what the account actually did. These forecasts are **diagnostic**. They are attached to decisions and never change a trade. An exposure rule driven by them is not built yet.
 
+### Research tracks (plan sections 12 to 14)
+
+Each track is a lab section with its own block in `configs/lab.json`. Every circuit is a plain gate list (`qflab/circuit.py`) executed on CUDA-Q by `qflab/backends/cudaq_programs.py`. The tests run the same circuits on an independent NumPy simulator and require identical statevectors.
+
+| Plan item | What was built | What this run found |
+| --- | --- | --- |
+| 12, quantum linear algebra | `methods/linear_solvers.py`: HHL (phase estimation of `exp(iAt)`, exact or Trotterized) and a QSVT solver (`methods/qsp.py` fits an odd, bounded polynomial for `1/x` and solves its phase factors). A measurement-only readout recovers signed weights; a one-setting estimator gives `1ᵀA⁻¹1`. Task: minimum-variance weights for the regularized ETF covariance. | The raw covariance has condition number 188 and is regularized first. At δ = 0.25 × mean variance (κ = 14.5, three short positions), HHL's state error is 2.5e-4 with 7 clock qubits and QSVT's is 2.6e-7 (degree-221 polynomial). The state is not the weights: reading all 8 to about 2% took 400,000 state preparations, and 4,000 gave 32–65% errors. At 400,000 the only signs that came out wrong belonged to weights of 1.4% or less, inside that error. |
+| 13.1, SQOA-style relaxation | `methods/relaxation.py`: sparsify the objective, pack non-interacting funds on shared qubits (X/Y/Z axes), diagonalize in the sampled span, round, repair to three funds. | Keeping 25% of pair terms fits 8 funds on at most 5 qubits and recovers the optimum in 62% of runs. With all pairs the encoding becomes the ordinary diagonal one (8 qubits) and the rate falls to 35%. Exact enumeration is always right. |
+| 13.2, quantum-assisted MCMC | `methods/mcmc.py`: a coupled-default model with 8 names; Metropolis, Gibbs, parallel tempering, and a Metropolis chain whose proposal is a transverse-field circuit. | The quantum proposal is symmetric to 3e-16, so the target is kept. Its spectral gap at β = 2 is 4× single-flip Metropolis and about the same as a uniform random proposal (below it at higher β). Single-flip and Gibbs chains stayed stuck in one mode; the quantum and parallel-tempering chains matched the target. Parallel tempering gave more effective samples per update, and each simulated quantum chain took one to five minutes of CPU time (depending on load) against milliseconds for a classical chain. |
+| 13.3, SQD / SKQD | `methods/subspace.py`: asset indices sampled from a trial state or its Krylov evolutions choose an `m`-coordinate sub-block of the covariance. | In every family and subspace size, the better of two classical rules (the `m` largest variances, or the largest entries after five power-iteration steps from the same uniform start) did at least as well as every quantum sampler. SKQD reached the best possible subspace on localized factors, but only from a start built from the volatilities. On the ETF covariance it beat "largest variances" (19% vs 29% of the leading factor missed) and exactly tied power iteration, which uses the same Krylov information classically. |
+| 14.1, constraint-preserving QAOA | `methods/qaoa_circuits.py`: Dicke initial state and ring XY mixer, no penalty. | Every shot is a valid portfolio. The chance of the best one is 6.6%, 7.4% and 11.8% at depth 1–3, against 1.8% for a random valid portfolio and 5.5% for the best penalty setting, at 1.9 to 2.5 times the two-qubit gates. |
+| 14.2, warm starts | `solve_qaoa(initial_parameters=..., refine=...)`, run date by date. | Starting from the previous date's angles cut median shots per decision from 207,000 to 33,000 with no loss (P(optimal) 1.12% → 1.30%). Reusing the first date's angles with no tuning at all did as well (1.29%) with only the 2,048-shot final sample. |
+| 14.3, MLAE | `methods/mlae.py`, in the risk lab. | See the risk lab above. |
+| 14.4, Grover adaptive search | `methods/gas.py`: search over the 56 valid portfolios only, objective computed coherently in a 6-qubit register after rounding. | Optimum in 73% of runs, with a mean of 50 coherent objective evaluations, on 14 qubits and up to 3,459 gates per circuit. Rounding is part of the problem: at 6 bits the true optimum is a rounded minimizer in 12 of 13 decisions and the unique one in only 9. |
+| 14.5, harder risk models | `problems/expectation.py`: two-factor book with a short call, Asian call. | See the risk lab above. |
+| 14.6, quantum kernels | `methods/kernels.py`: ZZ feature-map fidelity kernel; kernel ridge classification of the next 10-session volatility regime, with a purged chronological split. | Test accuracy on 33 examples: quantum kernel 52%, RBF 48%, linear 55%, a "volatility persists" rule 58%, all with overlapping ±16-point intervals. The quantum kernel estimated from 200 shots per pair scored 36%. Building it took 6,142 circuits. |
+| 14.7, physical hardware | Not run. | Needs a device account and sends data off this machine; not authorized. |
+| 14.8, quantum generative model | `methods/generative.py`: 4-qubit circuit Born machine on 16 return bins. | It fit its training histogram exactly, so on later data it scored the same as that histogram (cross-entropy 2.002), slightly behind a three-parameter Student t (1.999). Its tail probability was 8.5% against a realized 3.7%. |
+
+At these sizes an exact classical answer is always available, and every quantum result sits beside it and beside a strong classical heuristic. None of it is evidence of a quantum advantage. Each study's tab on the tearsheet shows the costs: qubits, gates, shots and simulation time.
+
 ### What is not built
 
-The plan's optional research tracks (HHL and QSVT linear solvers, sampling-based optimization, quantum-assisted MCMC, covariance spectral methods, the 10,000-asset scaling study), the risk overlay, a Nautilus Parquet catalog, physical hardware runs, and a development/validation/final split of dates. `DECISIONS.md` records each of these with the reason.
+The 10,000-asset scaling study (plan section 15), the risk overlay, a Nautilus Parquet catalog, physical hardware runs, and a development/validation/final split of dates for the portfolio study. `DECISIONS.md` records each with the reason.
 
 ## Earlier Classiq QAOA experiment (optional)
 
@@ -411,13 +452,19 @@ Read `summary.json` for ending portfolio value and `equity.csv` for each day's c
 ./scripts/cargo-local fmt --all -- --check
 .venv/bin/python -m pytest -q
 .venv/bin/python -m ruff check qflab tests
-.tools/cudaq-venv/bin/python -m pytest -q tests/test_expectation.py tests/test_iqae.py \
-  tests/test_qaoa_cudaq.py tests/test_lab.py tests/test_tearsheet.py
+.tools/cudaq-venv/bin/python -m pytest -q
 ```
 
-The first Python command runs in the data environment and skips the tests that need SciPy or CUDA-Q; the last command runs those in the CUDA-Q environment. The Rust QAOA test uses `.tools/cudaq-venv/bin/python` (or `QFLAB_QUANTUM_PYTHON`) and reports itself as skipped when that environment is absent.
+The first Python command runs in the data environment and skips the tests that need SciPy or CUDA-Q; the last command runs the whole suite in the CUDA-Q environment (about three minutes). The Rust QAOA test uses `.tools/cudaq-venv/bin/python` (or `QFLAB_QUANTUM_PYTHON`) and reports itself as skipped when that environment is absent.
 
-The quantum checks compare the state-preparation circuit with the exact discrete distribution through the simulator's statevector, compare Grover powers with `sin²((2k+1)θ)`, compare reported gate counts with CUDA-Q's own resource count, compare the QAOA circuit with an independent NumPy simulation, check IQAE interval coverage across seeds, and run the worker through the same stdin/stdout protocol Rust uses.
+The quantum checks compare the state-preparation circuit with the exact discrete distribution through the simulator's statevector, compare Grover powers with `sin²((2k+1)θ)`, compare reported gate counts with CUDA-Q's own resource count, compare the QAOA circuit with an independent NumPy simulation, check IQAE interval coverage across seeds, and run the worker through the same stdin/stdout protocol Rust uses. For the research tracks they run every gate kind and dense-unitary width on CUDA-Q and on the NumPy simulator and require the same statevector. They also check:
+
+- the QFT, Pauli rotations, Trotter steps and Dicke states against dense linear algebra;
+- the Grover-search arithmetic on every valid portfolio, and that one Grover step amplifies exactly the marked strings;
+- HHL exact on a clock-aligned spectrum, QSVT against the classical solution, and signed weights recovered from counts;
+- the MCMC proposal's symmetry and every chain's stationary distribution;
+- that the relaxation reproduces the sparsified objective and bounds it from below;
+- that each study writes plain JSON with chronological splits where data is involved.
 
 Install `requirements-dev.txt` and `requirements-data.txt` into `.venv` for the full test suite. The Rust historical integration test uses `.venv/bin/python` to generate an offline fixture; set `QFLAB_PYTHON` to use another environment containing the data packages. The research worker itself uses only Python's standard library.
 

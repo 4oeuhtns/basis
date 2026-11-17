@@ -18,6 +18,7 @@ import numpy as np
 
 from qflab.methods.classical import black_scholes_call, monte_carlo_discrete, sobol_call
 from qflab.methods.iqae import iqae
+from qflab.methods.mlae import mlae, power_schedule
 from qflab.problems.expectation import ExpectationProblem, lognormal_call
 
 SIMULATED = "simulator performance: CUDA-Q statevector on a CPU; work is counted in ideal queries"
@@ -60,6 +61,20 @@ def _iqae_runs(problem: ExpectationProblem, sampler_factory, epsilon, alpha, sho
     for seed in seeds:
         started = time.perf_counter()
         result = iqae(sampler_factory(problem, seed), epsilon=epsilon, alpha=alpha, shots=shots)
+        result["elapsed_seconds"] = time.perf_counter() - started
+        result["seed"] = seed
+        result["estimate_value"] = problem.to_value(result["estimate"])
+        result["ci_value_low"] = problem.to_value(result["ci_low"])
+        result["ci_value_high"] = problem.to_value(result["ci_high"])
+        runs.append(result)
+    return runs
+
+
+def _mlae_runs(problem: ExpectationProblem, sampler_factory, circuits, alpha, shots, seeds) -> list:
+    runs = []
+    for seed in seeds:
+        started = time.perf_counter()
+        result = mlae(sampler_factory(problem, seed), power_schedule(circuits), shots, alpha)
         result["elapsed_seconds"] = time.perf_counter() - started
         result["seed"] = seed
         result["estimate_value"] = problem.to_value(result["estimate"])
@@ -163,6 +178,22 @@ def run_risk_lab(config: dict, target: str, seed: int) -> dict:
         row["median_shots"] = float(np.median([r["resources"]["shots"] for r in runs]))
         row["deepest_circuit"] = _deepest(checker, runs)
         row["example_rounds"] = runs[0]["rounds"]
+        benchmark.append(row)
+    # Maximum-likelihood amplitude estimation on the same circuits (plan section 14, item 3).
+    for circuits in config.get("mlae", {}).get("circuits", []):
+        runs = _mlae_runs(problem, sampler_factory, circuits, alpha, shots, seeds)
+        row = _summarize(
+            "mlae",
+            "discrete",
+            circuits,
+            f"{circuits} circuits, powers up to {max(power_schedule(circuits))}",
+            runs,
+            problem.exact_value,
+            SIMULATED,
+        )
+        row["max_grover_power"] = max(r["resources"]["max_grover_power"] for r in runs)
+        row["median_shots"] = float(np.median([r["resources"]["shots"] for r in runs]))
+        row["deepest_circuit"] = _deepest(checker, runs)
         benchmark.append(row)
     replicates = config["sobol"]["replicates"]
     for per_replicate in config["sobol"]["samples_per_replicate"]:
@@ -334,7 +365,8 @@ def run_risk_lab(config: dict, target: str, seed: int) -> dict:
         "noise_study": noise_study,
         "noise_model_note": "depolarizing error after every CNOT and CZ; single-qubit gates, "
         "gates with two or more controls, and readout are noiseless, so this is optimistic",
-        "counting_convention": "IQAE work = shots x (2k + 1) applications of A or its inverse "
-        "summed over rounds; one Monte Carlo sample = one scenario draw and payoff evaluation",
+        "counting_convention": "IQAE and MLAE work = shots x (2k + 1) applications of A or its "
+        "inverse summed over rounds; one Monte Carlo sample = one scenario draw and payoff "
+        "evaluation",
         "elapsed_seconds": time.perf_counter() - started,
     }

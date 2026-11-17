@@ -97,18 +97,30 @@ def test_checks_fail_or_go_missing_instead_of_passing_by_default():
     assert status(absent, "self-financing") == "missing"
 
 
+def test_research_checks_appear_only_for_sections_that_ran_and_can_fail():
+    assert not [c for c in scientific_checks({}) if "MCMC" in c["name"]]
+    proposal = {"symmetric": False, "largest_asymmetry": 0.1, "settings_averaged": 2}
+    checks = scientific_checks({"mcmc_study": {"quantum_proposal": proposal}})
+    assert status(checks, "MCMC proposal") == "fail"
+    kernel = {
+        "data": {
+            "train_last_session": "2025-05-01",
+            "test_first_session": "2025-09-01",
+            "purged_per_boundary": 5,
+        }
+    }
+    assert status(scientific_checks({"kernel_study": kernel}), "chronological") == "pass"
+
+
 def test_page_is_self_contained_and_keeps_embedded_data_inert(tmp_path):
     results = {
         "risk_lab": {"status": "failed", "error": "</script><script>alert(1)</script>"},
         "portfolio": portfolio(),
     }
     data = page_data(results, MANIFEST, {"name": "x"})
-    assert data["available"] == {
-        "risk_lab": False,
-        "portfolio": True,
-        "qaoa_study": False,
-        "risk_forecast": False,
-    }
+    assert data["available"]["portfolio"] is True
+    assert not any(v for k, v in data["available"].items() if k != "portfolio")
+    assert {"risk_models", "linear_algebra", "generative_study"} <= set(data["available"])
     assert "traceback" not in data["manifest"]["sections"]["risk_lab"]
     assert "config" not in data["results"]["portfolio"]["runs"]["exact"]
     assert "config" in results["portfolio"]["runs"]["exact"]  # the saved results are untouched

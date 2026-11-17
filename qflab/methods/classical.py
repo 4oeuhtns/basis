@@ -113,3 +113,53 @@ def sobol_call(
         "seed": seed,
         "elapsed_seconds": time.perf_counter() - started,
     }
+
+
+def sobol_normal(
+    payoff,
+    dimension: int,
+    samples_per_replicate: int,
+    replicates: int,
+    seed: int,
+    confidence: float = 0.95,
+    post_factor: float = 1.0,
+) -> dict:
+    """Scrambled Sobol estimate of ``post_factor * E[payoff(z)]`` for independent normals ``z``.
+
+    The continuous-model reference for problems without a closed form. ``payoff`` maps an
+    ``(N, dimension)`` array to ``N`` values.
+    """
+    if samples_per_replicate < 2 or samples_per_replicate & (samples_per_replicate - 1):
+        raise ValueError("samples_per_replicate must be a power of two")
+    if replicates < 2:
+        raise ValueError("At least two scrambled replicates are needed for an interval")
+    started = time.perf_counter()
+    means = []
+    for replicate in range(replicates):
+        sampler = qmc.Sobol(
+            d=dimension, scramble=True, seed=np.random.default_rng([seed, replicate])
+        )
+        uniform = sampler.random_base2(int(math.log2(samples_per_replicate)))
+        z = norm.ppf(np.clip(uniform, 1e-16, 1 - 1e-16))
+        means.append(post_factor * float(np.mean(payoff(z))))
+    means = np.array(means)
+    estimate = float(means.mean())
+    half = float(
+        student_t.ppf(0.5 + confidence / 2, replicates - 1)
+        * means.std(ddof=1)
+        / math.sqrt(replicates)
+    )
+    total = samples_per_replicate * replicates
+    return {
+        "method": "sobol_qmc",
+        "target": "continuous",
+        "status": "ok",
+        "confidence": confidence,
+        "estimate_value": estimate,
+        "ci_value_low": estimate - half,
+        "ci_value_high": estimate + half,
+        "interval": f"Student-t across {replicates} independent scrambles",
+        "resources": {"samples": total, "work": total, "work_unit": "payoff evaluations"},
+        "seed": seed,
+        "elapsed_seconds": time.perf_counter() - started,
+    }

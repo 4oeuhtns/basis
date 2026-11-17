@@ -34,3 +34,4 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.ruff.lint.per-file-ignores]
 # Gate names inside @cudaq.kernel functions (ry, x, mz, ...) are resolved by the kernel compiler.
 "qflab/backends/cudaq_backend.py" = ["F821"]
+"qflab/backends/cudaq_programs.py" = ["F821"]

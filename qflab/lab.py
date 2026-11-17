@@ -26,7 +26,21 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-SECTIONS = ["risk_lab", "portfolio", "qaoa_study", "risk_forecast"]
+SECTIONS = [
+    "risk_lab",
+    "portfolio",
+    "qaoa_study",
+    "risk_forecast",
+    # Research tracks (build plan sections 12 to 14).
+    "risk_models",
+    "gas_study",
+    "linear_algebra",
+    "mcmc_study",
+    "spectral_study",
+    "relaxation_study",
+    "kernel_study",
+    "generative_study",
+]
 
 
 def write_json(path: Path, value) -> None:
@@ -80,11 +94,21 @@ def _exact_records(results: dict) -> tuple[list[dict], dict]:
     return records, equity
 
 
+def _basket_returns(results: dict):
+    """Daily basket returns from the frozen snapshot the exact backtest ran on."""
+    from qflab.experiments.prices import basket_log_returns, load_closes
+
+    run = results["portfolio"]["runs"]["exact"]
+    dates, _, closes = load_closes(REPO / run["run_directory"])
+    return basket_log_returns(closes), dates
+
+
 def run(config_path: Path, only: list[str] | None, reuse: Path | None, workers: int) -> Path:
     config = json.loads(config_path.read_bytes())
     if config.get("schema_version") != 1:
         raise ValueError("Unsupported lab config schema_version")
-    wanted = only or SECTIONS
+    # A config without a section's block simply does not run that section.
+    wanted = only or [name for name in SECTIONS if name in config]
     unknown = set(wanted) - set(SECTIONS)
     if unknown:
         raise ValueError(f"Unknown sections: {sorted(unknown)}")
@@ -165,10 +189,69 @@ def run(config_path: Path, only: list[str] | None, reuse: Path | None, workers: 
 
         return run_risk_forecast(config["risk_forecast"], records, equity, factory, seed)
 
-    section("risk_lab", risk_lab)
-    section("portfolio", portfolio)
-    section("qaoa_study", qaoa_study)
-    section("risk_forecast", risk_forecast)
+    def risk_models():
+        from qflab.experiments.risk_models import run_risk_models
+
+        return run_risk_models(config["risk_models"], target, seed)
+
+    def gas_study():
+        from qflab.experiments.gas_study import run_gas_study
+
+        records, _ = _exact_records(results)
+        return run_gas_study(config["gas_study"], records, target, seed, workers)
+
+    def linear_algebra():
+        from qflab.experiments.linear_algebra import run_linear_algebra
+
+        records, _ = _exact_records(results)
+        return run_linear_algebra(config["linear_algebra"], records, target, seed)
+
+    def mcmc_study():
+        from qflab.experiments.mcmc_study import run_mcmc_study
+
+        return run_mcmc_study(config["mcmc_study"], target, seed, workers)
+
+    def spectral_study():
+        from qflab.experiments.spectral_study import run_spectral_study
+
+        records, _ = _exact_records(results)
+        return run_spectral_study(config["spectral_study"], records, target, seed)
+
+    def relaxation_study():
+        from qflab.experiments.relaxation_study import run_relaxation_study
+
+        records, _ = _exact_records(results)
+        return run_relaxation_study(config["relaxation_study"], records, target, seed)
+
+    def kernel_study():
+        from qflab.experiments.kernel_study import run_kernel_study
+
+        returns, dates = _basket_returns(results)
+        return run_kernel_study(config["kernel_study"], returns, dates, target, seed)
+
+    def generative_study():
+        from qflab.experiments.generative_study import run_generative_study
+
+        returns, dates = _basket_returns(results)
+        return run_generative_study(config["generative_study"], returns, dates, target, seed)
+
+    bodies = {
+        "risk_lab": risk_lab,
+        "portfolio": portfolio,
+        "qaoa_study": qaoa_study,
+        "risk_forecast": risk_forecast,
+        "risk_models": risk_models,
+        "gas_study": gas_study,
+        "linear_algebra": linear_algebra,
+        "mcmc_study": mcmc_study,
+        "spectral_study": spectral_study,
+        "relaxation_study": relaxation_study,
+        "kernel_study": kernel_study,
+        "generative_study": generative_study,
+    }
+    for name in SECTIONS:
+        if name in config or name in wanted:
+            section(name, bodies[name])
 
     failed = [n for n, s in manifest["sections"].items() if s["status"] == "failed"]
     manifest["status"] = "completed_with_failures" if failed else "completed"

@@ -3,43 +3,16 @@
   "name": "core",
   "seed": 20261116,
   "quantum": {"target": "qpp-cpu"},
-  "risk_lab": {
-    "call": {"spot": 100.0, "strike": 105.0, "rate": 0.03, "volatility": 0.2, "maturity": 1.0},
-    "truncation_std": 3.0,
-    "confidence": 0.95,
-    "reference_qubits": 5,
-    "seeds": 30,
-    "iqae": {"epsilons": [0.05, 0.02, 0.01, 0.005, 0.002, 0.001], "shots": 100},
-    "sweep_epsilon": 0.005,
-    "monte_carlo_samples": [100, 1000, 10000, 100000, 1000000],
-    "sobol": {"samples_per_replicate": [8, 32, 128, 512, 2048], "replicates": 16},
-    "grid_qubits": [2, 3, 4, 5, 6, 7],
-    "strikes": [90.0, 105.0, 120.0],
-    "noise": {"qubits": 2, "two_qubit_depolarizing": [0.0, 0.0005, 0.002, 0.01], "epsilon": 0.01, "seeds": 20}
-  },
-  "portfolio": {
-    "exact_config": "optimized.json",
-    "qaoa_config": "optimized_qaoa.json",
-    "fee_bps_sensitivity": ["0", "10", "25"]
-  },
-  "qaoa_study": {
-    "decisions": "all",
-    "layers": [1, 2, 3],
-    "penalty_scales": ["1", "0.1"],
-    "seeds": 2,
-    "shots": 1024,
-    "final_shots": 2048,
-    "grid": 12,
-    "maxiter": 40,
-    "swap_search": {"seeds": 200, "max_evaluations": 56}
-  },
-  "risk_forecast": {
-    "threshold": 0.05,
-    "qubits": 5,
-    "truncation_std": 4.0,
-    "epsilon": 0.005,
-    "alpha": 0.05,
-    "shots": 100,
-    "monte_carlo_samples": 10000
-  }
+  "risk_lab": {"call": {"spot": 100.0, "strike": 105.0, "rate": 0.03, "volatility": 0.2, "maturity": 1.0}, "truncation_std": 3.0, "confidence": 0.95, "reference_qubits": 5, "seeds": 30, "iqae": {"epsilons": [0.05, 0.02, 0.01, 0.005, 0.002, 0.001], "shots": 100}, "sweep_epsilon": 0.005, "monte_carlo_samples": [100, 1000, 10000, 100000, 1000000], "sobol": {"samples_per_replicate": [8, 32, 128, 512, 2048], "replicates": 16}, "grid_qubits": [2, 3, 4, 5, 6, 7], "strikes": [90.0, 105.0, 120.0], "noise": {"qubits": 2, "two_qubit_depolarizing": [0.0, 0.0005, 0.002, 0.01], "epsilon": 0.01, "seeds": 20}, "mlae": {"circuits": [3, 5, 7, 8, 9, 10]}},
+  "portfolio": {"exact_config": "optimized.json", "qaoa_config": "optimized_qaoa.json", "fee_bps_sensitivity": ["0", "10", "25"]},
+  "qaoa_study": {"decisions": "all", "layers": [1, 2, 3], "penalty_scales": ["1", "0.1"], "seeds": 2, "shots": 1024, "final_shots": 2048, "grid": 12, "maxiter": 40, "swap_search": {"seeds": 200, "max_evaluations": 56}, "xy_mixer": {"layers": [1, 2, 3], "seeds": 1}, "warm_start": {"layers": 2, "penalty_scale": "1", "seeds": 2}},
+  "risk_forecast": {"threshold": 0.05, "qubits": 5, "truncation_std": 4.0, "epsilon": 0.005, "alpha": 0.05, "shots": 100, "monte_carlo_samples": 10000},
+  "risk_models": {"confidence": 0.95, "seeds": 20, "shots": 100, "epsilon": 0.005, "mlae_circuits": 7, "sobol": {"samples_per_replicate": 16384, "replicates": 16}, "models": [{"kind": "two_factor", "label": "Loss probability: two correlated factors, short call", "weights": [0.6, 0.4], "vols": [0.08, 0.05], "correlation": 0.5, "option_strike": 0.03, "option_notional": 0.6, "threshold": 0.04, "qubits_per_factor": 3, "truncation_std": 3.0, "payoff": "indicator"}, {"kind": "two_factor", "label": "Expected excess loss: two correlated factors, short call", "weights": [0.6, 0.4], "vols": [0.08, 0.05], "correlation": 0.5, "option_strike": 0.03, "option_notional": 0.6, "threshold": 0.04, "qubits_per_factor": 3, "truncation_std": 3.0, "payoff": "excess"}, {"kind": "asian_call", "label": "Asian call: average of 3 monitoring dates", "spot": 100.0, "strike": 100.0, "rate": 0.03, "volatility": 0.2, "maturity": 1.0, "steps": 3, "qubits_per_step": 2, "truncation_std": 3.0}]},
+  "gas_study": {"decisions": "all", "seeds": 2, "value_bits": 6, "patience": 8, "max_oracle_calls": 400},
+  "linear_algebra": {"max_qubits": 12, "synthetic": [{"size": 2, "kappa": 4}, {"size": 4, "kappa": 8}, {"size": 8, "kappa": 8}], "covariance_delta_fractions": [0.5, 0.25], "hhl_extra_clock_qubits": [1, 3, 5], "qsvt_epsilons": [0.01, 0.001], "trotter": {"system": "synthetic 4x4, kappa 8", "extra_clock_qubits": 2, "steps": [1, 2, 4]}, "readout": {"system": "ETF covariance 8x8, delta = 0.25 x mean variance", "hhl_extra_clock_qubits": 3, "qsvt_epsilon": 0.001, "shots": [1000, 10000, 100000], "seeds": 5}, "sweep": {"sizes": [4], "kappas": [2, 4, 8, 16, 32], "hhl_extra_clock_qubits": 3, "qsvt_epsilon": 0.01, "delta_fractions": [0.02, 0.1, 0.25, 0.5, 2.0]}},
+  "mcmc_study": {"sectors": [0, 0, 0, 0, 1, 1, 1, 1], "bias": 0.25, "within": 0.5, "across": 0.15, "beta": 2.0, "betas": [0.5, 1.0, 2.0, 3.0, 4.0], "proposal_settings": 6, "chains": 6, "steps": 3000, "burn_in": 300, "tail_defaults": 4, "tempering_betas": [0.5, 1.0, 2.0]},
+  "spectral_study": {"seeds": 5, "shots": 100, "time_step": 1.0, "krylov_states": 6, "subspace_sizes": [4, 8, 16], "families": [{"label": "Localized block (32 assets)", "kind": "localized", "size": 32, "block": 4, "gap": 3.0}, {"label": "Market factor (32 assets)", "kind": "market", "size": 32, "correlation": 0.4}, {"label": "Sector clusters (32 assets)", "kind": "clustered", "size": 32, "clusters": 4, "gap": 2.0}], "probe": {"family": "Sector clusters (32 assets)", "subspace_size": 8, "gaps": [1.1, 1.5, 2.0, 4.0], "shots": [10, 30, 100, 300], "trotter_steps": [1, 2]}},
+  "relaxation_study": {"decisions": "all", "densities": [0.0, 0.25, 0.5, 1.0], "seeds": 2, "shots": 200, "subspace_size": 16, "times": [0, 1, 2, 3], "trotter_steps": 2},
+  "kernel_study": {"horizon": 10, "stride": 2, "train_fraction": 0.55, "validation_fraction": 0.2, "ridges": [0.01, 0.1, 1.0], "quantum_scales": [0.25, 0.5, 1.0], "quantum_repetitions": [1, 2], "rbf_gammas": [0.03, 0.1, 0.3, 1.0, 3.0, 10.0], "polynomial_degrees": [1, 2, 3], "shots": 200},
+  "generative_study": {"qubits": 4, "layers": 3, "train_fraction": 0.6, "range_std": 3.0, "smoothing": 0.5, "tail_std": 1.5, "iterations": 80, "restarts": 2, "samples": 20000, "shots_per_evaluation": 2000}
 }

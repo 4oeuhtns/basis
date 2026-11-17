@@ -166,3 +166,14 @@ def test_risk_lab_report_separates_targets_and_records_every_method(tmp_path):
     assert report["grid_sweep"][1]["state_preparation"]["rotations"] == 15
     assert len(report["strike_sweep"]) == 2 and len(report["noise_study"]) == 2
     assert report["noise_study"][0]["two_qubit_depolarizing"] == 0.0
+
+
+def test_committed_lab_config_runs_every_section():
+    from pathlib import Path
+
+    from qflab.lab import SECTIONS
+    from qflab.ui.tearsheet import SECTIONS as SHOWN
+
+    config = json.loads((Path(__file__).parents[1] / "configs" / "lab.json").read_text())
+    assert [name for name in SECTIONS if name in config] == SECTIONS
+    assert list(SHOWN) == SECTIONS  # every section has a place on the tearsheet

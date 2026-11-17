@@ -11,7 +11,20 @@ import json
 from pathlib import Path
 
 TEMPLATE = Path(__file__).with_name("tearsheet_template.html")
-SECTIONS = ("risk_lab", "portfolio", "qaoa_study", "risk_forecast")
+SECTIONS = (
+    "risk_lab",
+    "portfolio",
+    "qaoa_study",
+    "risk_forecast",
+    "risk_models",
+    "gas_study",
+    "linear_algebra",
+    "mcmc_study",
+    "spectral_study",
+    "relaxation_study",
+    "kernel_study",
+    "generative_study",
+)
 
 
 def _ok(results: dict, name: str) -> bool:
@@ -129,6 +142,59 @@ def scientific_checks(results: dict) -> list[dict]:
         "there is one period (2025) and no development / validation / final split yet; the "
         "QAOA parameter-search scheme was chosen while looking at the first 2025 decision",
     )
+    checks.extend(research_checks(results))
+    return checks
+
+
+def research_checks(results: dict) -> list[dict]:
+    """Verification of the research-track sections that ran; absent sections add nothing."""
+    checks = []
+
+    def add(name: str, passed: bool, detail: str) -> None:
+        checks.append({"name": name, "status": "pass" if passed else "fail", "detail": detail})
+
+    if _ok(results, "risk_models"):
+        rows = results["risk_models"]["rows"]
+        add(
+            "Harder risk models: each circuit encodes its exact discrete sum",
+            all(r["circuit_matches_discrete_sum"] for r in rows),
+            f"statevector check on {len(rows)} problems (correlated factors, short option, "
+            "path-dependent payoff), tolerance 1e-9",
+        )
+    if _ok(results, "linear_algebra"):
+        control = results["linear_algebra"]["hhl_controls"][0]
+        add(
+            "Linear solvers reproduce the classical solution where they should be exact",
+            control["infidelity"] < 1e-9,
+            f"HHL with eigenvalues on the clock grid: 1 - fidelity = {control['infidelity']:.1e}; "
+            "readout uses measurement counts only",
+        )
+    if _ok(results, "mcmc_study"):
+        proposal = results["mcmc_study"]["quantum_proposal"]
+        add(
+            "Quantum MCMC proposal is symmetric, so Metropolis keeps the target",
+            proposal["symmetric"],
+            f"largest asymmetry {proposal['largest_asymmetry']:.1e} in the exact proposal "
+            f"matrix over {proposal['settings_averaged']} settings",
+        )
+    if _ok(results, "relaxation_study"):
+        validation = results["relaxation_study"]["validation"]
+        add(
+            "Quantum relaxation reproduces the sparsified objective and bounds it below",
+            validation["encoded_states_reproduce_objective"]
+            and validation["relaxed_ground_energy_is_lower_bound"],
+            f"every bitstring checked on {validation['cases']} decision-density cases",
+        )
+    if _ok(results, "kernel_study"):
+        data = results["kernel_study"]["data"]
+        add(
+            "Kernel study is chronological, with purged boundaries",
+            data["train_last_session"] < data["test_first_session"]
+            and data["purged_per_boundary"] >= 1,
+            f"training ends {data['train_last_session']}, test starts "
+            f"{data['test_first_session']}; {data['purged_per_boundary']} examples purged at "
+            "each boundary; hyperparameters chosen on validation",
+        )
     return checks
 
 
@@ -136,7 +202,9 @@ def page_data(results: dict, manifest: dict, config: dict) -> dict:
     """Trim the saved results to what the page draws."""
     results = copy.deepcopy(results)
     if _ok(results, "qaoa_study"):
-        for run in results["qaoa_study"]["runs"]:
+        study = results["qaoa_study"]
+        variant_runs = [run for v in study.get("variants", {}).values() for run in v["runs"]]
+        for run in study["runs"] + variant_runs:
             run.pop("parameters", None)
     if _ok(results, "portfolio"):
         for run in results["portfolio"]["runs"].values():
