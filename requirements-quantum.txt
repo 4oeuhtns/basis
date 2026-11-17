@@ -1,0 +1,2 @@
+# Use a separate Python 3.12 or 3.13 environment; the SDK requires pandas < 3.
+classiq==1.32.0

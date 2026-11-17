@@ -20,8 +20,9 @@ use rust_decimal::{Decimal, prelude::ToPrimitive};
 use serde::Serialize;
 
 use crate::{
-    config::{Config, decimal},
-    decision::PortfolioDecision,
+    config::decimal,
+    data::timestamp,
+    demo::{Config, decision::PortfolioDecision},
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,10 +83,6 @@ pub struct BaselineStrategy {
     session_index: usize,
     saved_decisions: Vec<PortfolioDecision>,
     saved_consumed: bool,
-}
-
-pub fn timestamp(ns: u64) -> String {
-    DateTime::<Utc>::from_timestamp_nanos(ns as i64).to_rfc3339()
 }
 
 impl BaselineStrategy {

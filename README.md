@@ -4,6 +4,36 @@ A small **Rust backtest using NautilusTrader**, with a separate **Python researc
 
 Python downloads and prepares data; Rust runs the trading simulation. Nautilus maintains the actual orders, fills, cash, and holdings. Usage and explanations live in this README; internal notes and lessons remain ignored.
 
+## Find your way around the code
+
+A Rust module is a labeled drawer: related code lives together, and other modules use its public functions. `mod.rs` is the entry point for a folder. `lib.rs` declares the available modules; `main.rs` chooses which command to run.
+
+```text
+src/
+├── main.rs               Command-line entry point
+├── lib.rs                Library module declarations
+├── config.rs             Portfolio and optimizer settings, shared validation
+├── backtest/
+│   ├── mod.rs            Run a portfolio simulation and save its results
+│   ├── engine.rs         Configure the native Nautilus account and instruments
+│   ├── strategy.rs       React to bars, plan allocations, and execute orders
+│   ├── state.rs          Account snapshots, decisions, and fill records
+│   └── comparison.rs     Compare a strategy with its baseline
+├── data/
+│   ├── mod.rs            Validate snapshots and build synchronized trading bars
+│   └── historical.rs     Read historical CSV/Parquet and the frozen calendar
+├── research.rs           Send past-only requests to Python; validate and replay answers
+├── output.rs             Save reports, file hashes, and run provenance
+└── demo/                 Original single-fund example and saved-instruction replay
+qflab/                    Python data preparation, portfolio selection, and QAOA experiment
+configs/                  Experiment recipes
+tests/                   Accounting, timing, data, and worker checks
+```
+
+For the current optimizer, follow `src/backtest/mod.rs` → `src/research.rs` → `qflab/optimizer_worker.py`. Then read `src/backtest/strategy.rs` to see how returned weights become orders. `src/backtest/state.rs` describes the records written to each run directory.
+
+The portfolio engine uses shared validation and reporting directly. The original example is contained in `demo/`, so it is easy to study separately. Existing JSON recipes and CLI commands still work; Rust imports now use `backtest`, `config`, `data`, `research`, and `demo`.
+
 ## Run your first backtest
 
 From this repository:
@@ -56,7 +86,7 @@ Install the data tools into the project's virtual environment (already installed
 
 The end date is **exclusive**, so `2026-01-01` includes December 31, 2025. This period has 250 XNYS sessions. The frozen schedule includes the January 9 special closure, ordinary holidays, daylight saving changes, and shortened sessions. Each daily bar becomes available at that session's actual close. A daily bar's date label does not mean its closing price was known at midnight.
 
-The config starts with $10,000 and aims for 45% in each fund plus a 10% cash reserve. It makes a decision every **21 recorded sessions**, then executes the saved plan at the following session's close. That interval is not a calendar-month schedule. All prices must arrive before a decision; sales update cash and positions before purchases begin.
+The config starts with $10,000 and aims for 45% in each fund plus a 10% cash reserve. It uses `"strategy": "monthly"`: allocate at the first completed close, then check the allocation at each calendar month-end close. Saved plans execute at the following session's close. All prices must arrive before a decision; sales update cash and positions before purchases begin. A month-end decision that coincides with execution waits for the updated cash and holdings.
 
 The snapshot contains:
 
@@ -80,9 +110,156 @@ Historical run folders include the entire snapshot and a replayable `config.json
 
 Execution still assumes zero spread, impact, and latency and a fill at the next observed close. These assumptions make this a data/accounting baseline. A live trading model needs executable quotes, order arrival times, and worker delays. Yahoo data is downloaded for personal research; source usage rights are separate from the software license. See the [yfinance documentation](https://ranaroussi.github.io/yfinance/) and [exchange-calendars project](https://github.com/gerrymanoim/exchange_calendars).
 
-To trace the code, start with `qflab/market_data.py` (prepare the recording), `src/historical.rs` (verify and read it), then `src/portfolio/strategy.rs` (react to completed bars). The synthetic examples keep their original strict weekday calendar; historical data uses a separate adapter.
+To trace the code, start with `qflab/market_data.py` (prepare the recording), `src/data/historical.rs` (verify and read it), then `src/backtest/strategy.rs` (react to completed bars). The synthetic examples keep their original strict weekday calendar; historical data uses a separate adapter.
 
-## Run the Python → Rust handoff
+## Compare monthly rebalancing with buy-and-hold
+
+```sh
+./scripts/cargo-local run --locked --offline -- compare configs/historical.json
+```
+
+Rebalancing is a scheduled checkup for the portfolio. If one fund has grown faster, its share of the portfolio can become larger than intended. At the checkup, we calculate the whole-unit quantities needed to move toward the original weights. If we already own those quantities, the log records `no_order` and no trade is needed.
+
+The comparison runs two fixed rules against the same frozen data:
+
+- **Monthly:** allocate once, then check the 45% / 45% allocation at calendar month-ends, keeping the saved cash reserve.
+- **Buy-and-hold:** make the same initial allocation, then keep those units. Prices can change its investment weights.
+
+Starting cash, target weights, fees, price convention, execution timing, and terminal holdings policy are the same. The control uses a copy of the monthly run's frozen inputs. The comparison saves each complete run beneath its output directory, plus `comparison.json` with summaries and `comparison.csv` with `strategy_equity`, `benchmark_equity`, and their `difference`. Here the difference is monthly value minus buy-and-hold value; it describes this dataset and is not evidence that either rule will perform better later.
+
+The schedule follows the exchange calendar rather than a fixed number of sessions:
+
+| Decision time | What it means | Earliest execution under our rule |
+| --- | --- | --- |
+| Jan 2, 2025 close | Initial allocation after the first observed session | Jan 3 close |
+| Jan 31, 2025 close | January's last trading session | Feb 3 close, after the weekend |
+| Nov 28, 2025 shortened close | November's last session, at 18:00 UTC | Dec 1 close |
+| Dec 31, 2025 close | December's last session | No January 2026 data is supplied; any new intention expires |
+
+Month-end dates come from the frozen calendar and requested date coverage, without reading future prices. A partial final calendar month is excluded from month-end checks. For the last month to qualify, request data through its entire calendar span, with an exclusive end of the first day of the following month. A file ending July 10 does not make July 9 a month-end.
+
+`decision_log.json` now includes a `trigger`: `initial_allocation`, `month_end`, or `session_interval`. The run manifest records the calendar month-end dates. Existing `"strategy": "scheduled"` configurations still use `rebalance_every` (at least 2). Monthly configurations omit `rebalance_every` and require a historical snapshot calendar.
+
+In Rust, `BTreeSet<NaiveDate>` is a sorted checklist of month-end dates. The strategy checks whether the completed session's date is on that list. `deferred_trigger` remembers a due checkup while earlier orders finish; `finish_execution()` then calculates the next plan from Nautilus's updated ledger. The offline tests include a hand-calculated purchase on month-end, a weekend before execution, an early close, future-price changes, partial months, expired final intentions, and frozen replay.
+
+## Optimize a three-fund portfolio
+
+The previous rules divided money using fixed weights. The `optimized` strategy computes a new selection using observations available at each decision time. The approved retrospective research universe is **SPY, QQQ, IWM, EFA, EEM, TLT, GLD, VNQ**. Exactly three receive target weights of 30% each, with a 10% cash reserve.
+
+Think of choosing three players from a team of eight. There are only **56 possible groups**. Python scores every group, balancing estimated return, risk, and changing the current holdings. It returns the group with the lowest score. The answer is exact for this stated score; the return and risk forecasts remain estimates.
+
+```mermaid
+flowchart LR
+    A[Rust: trailing prices and actual holdings] --> B[Python: score all 56 selections]
+    B --> C[Three selected funds and target weights]
+    C --> D[Nautilus: orders, fees, cash and positions]
+```
+
+Download the separate snapshot with warmup history, then run the algorithm:
+
+```sh
+.venv/bin/python -m qflab.market_data download \
+  --symbols SPY QQQ IWM EFA EEM TLT GLD VNQ \
+  --start 2024-09-01 --end 2026-01-01 \
+  --output runs/snapshots/eight-etf-2024warmup-2025
+./scripts/cargo-local run --locked --offline -- configs/optimized.json
+./scripts/cargo-local run --locked --offline -- compare configs/optimized.json
+```
+
+These inputs are already downloaded in this workspace. Trading and reported daily equity start in **2025**, controlled by `trading_start`. Late-2024 observations only supply the first trailing window; no pre-2025 trades are simulated. The comparison uses equal-weight monthly allocation across all eight funds as its benchmark, with the same trading period, cash reserve, fees, and execution rules. The initial target allocations differ because one rule selects three funds and the other holds all eight.
+
+The preset is fixed in `configs/optimized.json`:
+
+| Setting | Meaning |
+| --- | --- |
+| `lookback_returns: 60` | Fit on 60 daily simple returns, using 61 closing observations ending at the cutoff |
+| `forecast_horizon_sessions: 21` | Scale the sample mean and unbiased covariance by 21; this is a declared forecasting approximation |
+| `risk_aversion: "3"` | More weight on reducing portfolio variance |
+| `turnover_penalty: "0.001"` | Penalize changing fund membership, divided by three; a turnover proxy |
+| `fee_bps: "10"` | Charge 0.1% of actual traded notional through Nautilus, separately from the model's turnover proxy |
+| `simulated_delay_seconds: 60` | The answer becomes available one simulated minute after the cutoff |
+| `timeout_seconds: 5` | Stop a worker that exceeds five wall-clock seconds and retain actual holdings |
+
+For selection bits `x`, with exactly three bits equal to one, target investment weights are `w = 0.3 * x`. The minimized financial objective is `risk_aversion * w'Σw - μ'w + turnover_penalty / 3 * sum(abs(x - currently_held_flags))`. Mean `μ` and covariance `Σ` refer to the same 21-session forecast horizon. An existing positive native position sets that fund's held flag. This membership penalty approximates trading friction; actual quantity changes, rounding, and fees are recorded by Nautilus.
+
+Python constructs a canonical binary quadratic model and rounds each polynomial coefficient to an integer grid of `1e-12`. It enumerates all feasible selections and uses a lexicographic tie-break. `canonical_model`, `objective_integer`, mean forecasts, covariance, and the number of evaluated portfolios are included in every successful response. Later quantum experiments can use exactly these coefficients, with a separately verified cardinality constraint.
+
+The Rust/Python boundary is sequential and causal:
+
+1. Nautilus completes all bars and account updates for a session. At a due decision, the strategy records actual cash, quantities, and marks.
+2. The Rust runner pauses the engine between complete session batches. It constructs a request containing only the trailing window through that cutoff, current portfolio state, and declared model settings.
+3. A separate Python process reads that request from stdin and writes JSON to stdout. It opens no dataset files and receives no dataset path. Both sides check the cutoff, universe, hash, cardinality, weights, and account state.
+4. Rust makes the answer available after the configured simulated delay. It sizes intentions from the saved cutoff prices/state, then submits them at the first subsequent eligible session close. Execution-time funding checks can reduce buys.
+
+The process uses isolated Python interpreter mode, which is not an operating-system filesystem sandbox. The causal guarantee here comes from the request construction and worker implementation. Wall-clock solver duration is measured separately from simulated availability; waiting for Python does not silently advance the historical market clock. A live adapter would need asynchronous delivery and actual order/quote timing.
+
+`optimizer_log.json` saves every full request and response, request hash, solver elapsed time, status, availability, and delivery status. `solver_replay.json` provides the same records for frozen replay. The saved run's `config.json` automatically references those records, so replay does **not** need a working Python executable. Replay requires matching trailing observations, settings, cash, holdings, and timing. A missing or mismatched replay record fails visibly.
+
+A missing, invalid, failed, or timed-out live worker response retains current positions and is counted in `optimizer_fallbacks`; trading/accounting failures still fail the run. The final December answer is saved as `expired_end_of_data` when no later execution session exists. The log preserves selected targets even when whole-unit rounding or cash limits leave different actual holdings.
+
+The history remains retrospective adjusted research data. The transport excludes future price rows; historical corporate-action vintages are not point-in-time. This implementation is a working portfolio-selection experiment under those data and execution assumptions. No parameters are tuned automatically, and the results do not establish future investing performance or quantum advantage.
+
+Start reading `qflab/optimizer_worker.py` for the score and exact search, `src/research.rs` for the request/reply coordinator, and `src/backtest/strategy.rs` for converting selected weights into native orders. The integration checks include later-price changes, actual-state inputs, fees, delayed delivery, failed workers, timeout fallback, malformed responses, and replay with Python unavailable. An independent NumPy calculation checks every binary model energy and the best feasible selection.
+
+## First QAOA portfolio experiment
+
+Start with **one saved monthly decision**. The exact solver already provides an answer key. QAOA is an alternative search method for the same estimated financial score: it does not replace the return forecast or receive future observations. `qflab/qaoa.py` handles this experiment separately from the trading loop.
+
+Each ETF has a binary variable: `1` means selected and `0` means excluded. Eight variables give 256 possible selections; 56 contain exactly three ETFs. The variable order comes from the saved canonical model, including its `.SIM` instrument IDs. Every valid selection still means three 30% targets and a 10% cash reserve.
+
+The quantum-compatible score, or QUBO, is:
+
+```text
+quantum_score(x) = existing_financial_score(x) + A * (sum(x) - 3)^2
+```
+
+Picking three adds zero penalty. Picking two or four adds `A`; picking one or five adds `4*A`. In integer coefficient units, choose `A = 1 + sum(abs(linear coefficients)) + sum(abs(pair coefficients))`. The financial score can change by at most that coefficient sum, so every invalid selection must score worse than every valid selection. This conservative starting penalty establishes correctness; it does not guarantee that a shallow QAOA circuit samples good portfolios often.
+
+The expansion uses `x*x = x` for binary variables. An independent `x = (1-z)/2` check translates the QUBO to an Ising score, the representation used for quantum phase rotations. All 256 scores are checked exactly before building a circuit. The SDK then receives the expanded QUBO divided by `A`, which keeps the same ranking while giving the circuit manageable numeric coefficients. Its actual cost function is checked across all 256 selections to catch floating conversion or variable-order mistakes. The Pyomo model already contains the penalty, so no additional cardinality constraint is passed to Classiq.
+
+Classiq **1.32.0** requires Python 3.10–3.13 and pandas below 3. Our data environment uses Python 3.14 and pandas 3, so use a separate Python 3.12 environment. It is already installed under `.tools/qaoa-venv` in this workspace. On a fresh checkout:
+
+```sh
+python3.12 -m venv .tools/qaoa-venv
+.tools/qaoa-venv/bin/python -m pip install -r requirements-quantum.txt
+```
+
+First freeze one request from a saved optimized run. Replace `RUN_DIRECTORY` with the directory containing that run's `solver_replay.json`; each output directory must be new:
+
+```sh
+.venv/bin/python -m qflab.qaoa prepare \
+  --replay RUN_DIRECTORY/solver_replay.json --index 0 \
+  --output runs/qaoa/first-decision
+```
+
+This writes only the selected request, a recomputed exact reference, the QUBO, an exhaustive audit, and a file-hash manifest. It verifies the saved request hash and rebuilds the model from its past-only price window. The QAOA run reads this frozen experiment rather than the complete historical dataset or other monthly decisions. The January 2, 2025 request is already prepared at `runs/qaoa/first-decision` in this workspace; its exact selection is GLD, QQQ, and SPY.
+
+Build and export the circuit model locally:
+
+```sh
+.tools/qaoa-venv/bin/python -m qflab.qaoa run \
+  runs/qaoa/first-decision --layers 1 --build-only
+```
+
+This creates a new attempt directory containing `portfolio.qmod`, `model.json`, synthesis options, settings, source copies/hashes, and installed package versions. It makes no authentication, synthesis, or execution calls. The Qmod can be opened in the Classiq platform for inspection.
+
+To run the actual quantum-circuit simulation, authenticate the SDK with your academic Classiq account, then run:
+
+```sh
+.tools/qaoa-venv/bin/python -c 'import classiq; classiq.authenticate()'
+.tools/qaoa-venv/bin/python -m qflab.qaoa run \
+  runs/qaoa/first-decision --layers 1 --shots 1024 --maxiter 20
+```
+
+This uses the Classiq cloud `simulator` backend and its account quota. `layers=1`, or `p=1`, means one scoring stage and one mixing stage. Think of two adjustable knobs: a classical optimizer changes them, runs the circuit repeatedly, and tries to improve its sampled scores. A **shot** is one measurement producing one candidate selection. The 1,024 shots apply to each objective evaluation and the final sample; they are not the total workload. We start with ordinary mean-cost optimization (`quantile=1.0`). A deeper circuit and CVaR tuning can follow this first controlled experiment.
+
+Every decoded outcome is scored independently using the original integer financial model. Invalid selections are recorded but cannot become the chosen answer. `result.json` reports the best valid selection, its objective gap from the exact optimum, feasible probability, optimal probability, every sampled selection, optimizer parameters/cost trace, and wall time including synthesis. `run.json` records compiled circuit width/depth; the result includes uniformly random probabilities for comparison. With eight decision bits, a uniform distribution produces a valid three-fund selection with probability `56/256 = 21.875%`. Finding a good answer once on this tiny problem does not establish a quantum speedup. A run with no valid sampled selection reports `no_feasible_sample` and supplies no portfolio.
+
+The actual simulator requires SDK authentication and available academic quota. Local model construction and export have been verified without cloud execution. After this one-decision experiment succeeds, the next integration is an explicit QAOA solver option at the existing Rust/Python boundary, with suitable solver timing and fallback behavior. Rust currently accepts the exact solver's response method; this experiment writes research evidence, and does not submit trades.
+
+Read the [Classiq portfolio example](https://github.com/Classiq/classiq-library/tree/main/applications/finance/portfolio_optimization) for the upstream `CombinatorialProblem` workflow and [SDK package metadata](https://pypi.org/project/classiq/1.32.0/) for compatibility. To run the optional SDK checks, install `requirements-dev.txt` in the quantum environment and run `.tools/qaoa-venv/bin/python -m pytest -q tests/test_qaoa.py`. The main test environment runs the math and sample-decoding checks without Classiq installed.
+
+## Single-fund instruction example
 
 ```sh
 python3 -m qflab.worker \
@@ -92,7 +269,7 @@ python3 -m qflab.worker \
 ./scripts/cargo-local run --locked --offline -- configs/replay.json
 ```
 
-The worker currently writes a **classical fixed-weight baseline**. No quantum SDK or circuit is implemented yet. A later quantum worker will write the same versioned decision format. Python runs before the backtest, outside the simulated event loop.
+This single-fund example writes a fixed-weight instruction to demonstrate serialization. The multi-fund optimizer above uses a complete trailing-data/state request and a sequential request/reply protocol. A future Classiq solver can consume the same canonical portfolio model used by the exact reference.
 
 ## What gets saved
 
@@ -112,7 +289,7 @@ Read `summary.json` for ending portfolio value and `equity.csv` for each day's c
 
 Install `requirements-dev.txt` and `requirements-data.txt` into `.venv` for the full test suite. The Rust historical integration test uses `.venv/bin/python` to generate an offline fixture; set `QFLAB_PYTHON` to use another environment containing the data packages. The research worker itself uses only Python's standard library.
 
-The Rust tests use the real Nautilus engine to check daily accounting, no trades, flat prices, fees, next-close execution, drift/rebalancing, future-data isolation, unaffordable orders, and Python replay. Portfolio checks add synchronized closes, shared cash, sales settling before purchases, reserve/fee caps, missing sessions, partial-fill failure, and frozen-input replay. Historical checks compare CSV/Parquet economic results, six-decimal marks with USD rounding, an early close and holiday gap, volume above the synthetic limit, corrupted files, missing sessions, and incorrect availability timestamps. Python tests cover the worker boundary, calendar behavior, immutable/offline cache reuse, and source normalization.
+The Rust tests use the real Nautilus engine to check daily accounting, no trades, flat prices, fees, next-close execution, drift/rebalancing, future-data isolation, unaffordable orders, and Python replay. Portfolio checks add synchronized closes, shared cash, sales settling before purchases, reserve/fee caps, missing sessions, partial-fill failure, and frozen-input replay. Historical checks compare CSV/Parquet economic results, six-decimal marks with USD rounding, an early close and holiday gap, volume above the synthetic limit, corrupted files, missing sessions, and incorrect availability timestamps. Monthly checks cover all twelve 2025 month-ends, same-close execution/decision ordering, weekend execution delays, partial months, future-price isolation, and the controlled comparison. Python tests cover the worker boundary, calendar behavior, immutable/offline cache reuse, and source normalization.
 
 ## Versions and a fresh checkout
 

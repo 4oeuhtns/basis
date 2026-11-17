@@ -2,12 +2,9 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 use qflab_backtest::{
-    data::Snapshot,
-    portfolio::{
-        PortfolioSnapshot,
-        config::PortfolioConfig,
-        runner::{Simulation, simulate},
-    },
+    backtest::{Simulation, simulate},
+    config::PortfolioConfig,
+    data::{PortfolioSnapshot, Snapshot},
 };
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
@@ -376,8 +373,8 @@ fn saved_inputs_replay_and_failed_runs_keep_their_evidence() {
     config.output_root = root.join("runs");
     let recipe = root.join("config.json");
     fs::write(&recipe, serde_json::to_vec(&config).unwrap()).unwrap();
-    let output = qflab_backtest::portfolio::runner::run(&recipe).unwrap();
-    let replay = qflab_backtest::portfolio::runner::run(&output.join("config.json")).unwrap();
+    let output = qflab_backtest::backtest::run(&recipe).unwrap();
+    let replay = qflab_backtest::backtest::run(&output.join("config.json")).unwrap();
     for file in [
         "equity.csv",
         "holdings.csv",
@@ -401,7 +398,7 @@ fn saved_inputs_replay_and_failed_runs_keep_their_evidence() {
     }
     config.output_root = root.join("failed_runs");
     fs::write(&recipe, serde_json::to_vec(&config).unwrap()).unwrap();
-    assert!(qflab_backtest::portfolio::runner::run(&recipe).is_err());
+    assert!(qflab_backtest::backtest::run(&recipe).is_err());
     let failed = fs::read_dir(&config.output_root)
         .unwrap()
         .next()

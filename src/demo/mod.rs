@@ -1,62 +1,35 @@
-//! Wire our small research adapter into the real Nautilus engine.
+//! Original single-fund example and saved-instruction replay.
+mod config;
+mod decision;
+mod strategy;
+
 use std::{
     cell::RefCell,
     fs,
     path::{Path, PathBuf},
-    process::Command,
     rc::Rc,
     time::Instant,
 };
 
 use anyhow::{Context, Result, ensure};
-use chrono::Utc;
 use nautilus_model::{data::BarType, identifiers::InstrumentId};
 use rust_decimal::Decimal;
-use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{
-    config::Config,
-    data::{Snapshot, sha256},
-    decision::load_decisions,
-    engine,
-    strategy::{BaselineStrategy, RunState},
+    backtest::engine::{self, Reports},
+    data::Snapshot,
+    output::{self, create_run_directory, write_csv, write_json, write_reports},
 };
-
-pub const NAUTILUS_VERSION: &str = "0.66.0";
-
-// Identify the code compiled into this binary even before the first Git commit exists.
-pub(crate) fn compiled_source_hash() -> String {
-    sha256(
-        concat!(
-            include_str!("main.rs"),
-            include_str!("lib.rs"),
-            include_str!("config.rs"),
-            include_str!("data.rs"),
-            include_str!("decision.rs"),
-            include_str!("strategy.rs"),
-            include_str!("runner.rs"),
-            include_str!("engine.rs"),
-            include_str!("historical.rs"),
-            include_str!("portfolio/mod.rs"),
-            include_str!("portfolio/config.rs"),
-            include_str!("portfolio/strategy.rs"),
-            include_str!("portfolio/runner.rs"),
-            include_str!("../Cargo.toml"),
-            include_str!("../qflab/worker.py"),
-            include_str!("../qflab/market_data.py"),
-        )
-        .as_bytes(),
-    )
-}
+pub use config::Config;
+use decision::load_decisions;
+use strategy::BaselineStrategy;
+pub use strategy::{DecisionLog, EquityRow, FillRow, RunState};
 
 #[derive(Debug)]
 pub struct Simulation {
     pub state: RunState,
-    pub engine_result: Value,
-    pub orders: Vec<Value>,
-    pub positions: Vec<Value>,
-    pub account_events: Value,
+    pub reports: Reports,
 }
 
 pub fn simulate(config: &Config, snapshot: &Snapshot) -> Result<Simulation> {
@@ -90,50 +63,14 @@ pub fn simulate(config: &Config, snapshot: &Snapshot) -> Result<Simulation> {
         state.equity.len() == snapshot.sessions.len(),
         "Missing account snapshots"
     );
-    Ok(Simulation {
-        state,
-        engine_result: reports.engine_result,
-        orders: reports.orders,
-        positions: reports.positions,
-        account_events: reports.account_events,
-    })
-}
-
-pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
-    fs::write(path, serde_json::to_vec_pretty(value)?)?;
-    Ok(())
-}
-
-pub(crate) fn write_csv<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
-    let mut writer = csv::Writer::from_path(path)?;
-    for row in rows {
-        writer.serialize(row)?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-
-pub(crate) fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(Simulation { state, reports })
 }
 
 pub fn run(config_path: &Path) -> Result<PathBuf> {
     let started = Instant::now();
     let config = Config::load(config_path)?;
     let snapshot = Snapshot::load(&config.data_path)?;
-    // A new directory for every run: never overwrite previous evidence.
-    fs::create_dir_all(&config.output_root)?;
-    let run_id = format!(
-        "{}-{}",
-        Utc::now().format("%Y%m%dT%H%M%S%.9fZ"),
-        std::process::id()
-    );
-    let output = config.output_root.canonicalize()?.join(&run_id);
-    fs::create_dir(&output)?;
+    let output = create_run_directory(&config.output_root, "")?;
     fs::write(output.join("prices.csv"), &snapshot.bytes)?;
     write_json(&output.join("resolved_config.json"), &config)?;
     // The saved recipe points to this run's frozen inputs, so it can be replayed directly.
@@ -149,24 +86,12 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
         fs::copy(path, output.join("input_decisions.json"))?;
     }
     let manifest_path = output.join("manifest.json");
-    let config_bytes = serde_json::to_vec(&frozen_config)?;
-    fs::write(output.join("Cargo.lock"), include_bytes!("../Cargo.lock"))?;
-    let mut manifest = json!({
-        "schema_version": 1, "run_id": run_id, "status": "running",
-        "created_at_utc": Utc::now().to_rfc3339(),
-        "nautilus_rust_version": NAUTILUS_VERSION,
-        "rustc": command_output("rustc", &["--version"]),
-        "git_commit": command_output("git", &["rev-parse", "HEAD"]),
-        "git_status": command_output("git", &["status", "--porcelain"]),
-        "config_sha256": sha256(&config_bytes), "snapshot_sha256": snapshot.sha256,
-        "resolved_config_sha256": sha256(&serde_json::to_vec(&config)?),
-        "compiled_source_sha256": compiled_source_hash(),
-        "cargo_lock_sha256": sha256(include_bytes!("../Cargo.lock")),
-        "os": std::env::consts::OS, "architecture": std::env::consts::ARCH,
-        "session_count": snapshot.sessions.len(),
-        "first_session": snapshot.sessions[0].timestamp,
-        "last_session": snapshot.sessions.last().unwrap().timestamp,
-        "assumptions": {
+    let mut manifest = output::manifest(&output, &frozen_config, &config)?;
+    manifest["snapshot_sha256"] = json!(snapshot.sha256);
+    manifest["session_count"] = json!(snapshot.sessions.len());
+    manifest["first_session"] = json!(snapshot.sessions[0].timestamp);
+    manifest["last_session"] = json!(snapshot.sessions.last().unwrap().timestamp);
+    manifest["assumptions"] = json!({
             "prices": "fabricated synthetic total-return units; USD; two decimal places",
             "quantity": "whole units; no shorts, leverage, or cash borrowing",
             "calendar": "consecutive Mon–Fri closes at 21:00 UTC; no exchange holiday/DST model",
@@ -179,7 +104,6 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
             "reporting": "summary equity = Nautilus USD cash + Nautilus units * close; automatic engine analysis disabled",
             "corporate_actions": "none; do not add dividends to these total-return units",
             "evaluation": "teaching fixture only; no performance inference or tuned date splits"
-        }
     });
     write_json(&manifest_path, &manifest)?;
     let simulation = match simulate(&config, &snapshot) {
@@ -201,16 +125,7 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
         &output.join("order_events.json"),
         &simulation.state.order_events,
     )?;
-    write_json(&output.join("orders.json"), &simulation.orders)?;
-    write_json(&output.join("positions.json"), &simulation.positions)?;
-    write_json(
-        &output.join("account_events.json"),
-        &simulation.account_events,
-    )?;
-    write_json(
-        &output.join("engine_result.json"),
-        &simulation.engine_result,
-    )?;
+    write_reports(&output, &simulation.reports)?;
     let last = simulation.state.equity.last().context("No final equity")?;
     let fees: Decimal = simulation.state.fills.iter().map(|f| f.commission).sum();
     let summary = json!({ "starting_cash": config.cash()?, "ending_cash": last.cash,

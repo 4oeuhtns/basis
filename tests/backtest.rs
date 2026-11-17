@@ -1,7 +1,10 @@
 //! These are financial/temporal checks against independent arithmetic, not mocked engines.
 use std::{fs, path::Path, process::Command};
 
-use qflab_backtest::{config::Config, data::Snapshot, runner::simulate};
+use qflab_backtest::{
+    data::Snapshot,
+    demo::{Config, simulate},
+};
 use rust_decimal::Decimal;
 
 fn config() -> Config {

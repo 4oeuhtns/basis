@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
-use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Utc, Weekday};
 use parquet::{
     file::{reader::FileReader, serialized_reader::SerializedFileReader},
     record::RowAccessor,
@@ -17,9 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    config::decimal,
-    data::{Session, Snapshot, sha256},
-    portfolio::{PortfolioSnapshot, config::PortfolioConfig},
+    config::{PortfolioConfig, decimal, validate_symbol},
+    data::{PortfolioSnapshot, Session, Snapshot, sha256},
 };
 
 pub const KIND: &str = "historical_adjusted_research_units";
@@ -100,14 +99,7 @@ pub fn read_manifest(path: &Path) -> Result<Manifest> {
     );
     let mut expected = BTreeSet::from(["calendar.csv".to_string()]);
     for symbol in &manifest.assets {
-        ensure!(
-            !symbol.is_empty()
-                && symbol.len() <= 20
-                && symbol
-                    .bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()),
-            "Invalid snapshot symbol"
-        );
+        validate_symbol(symbol).context("Invalid snapshot symbol")?;
         for suffix in [".csv", ".parquet", ".source.parquet"] {
             expected.insert(format!("{symbol}{suffix}"));
         }
@@ -169,6 +161,34 @@ fn calendar(path: &Path, manifest: &Manifest) -> Result<Vec<CalendarRow>> {
         }
     }
     Ok(rows)
+}
+
+/// Calendar-only dates. A partial final month is never inferred from the final price bar.
+pub fn month_end_dates(manifest_path: &Path) -> Result<BTreeSet<NaiveDate>> {
+    let manifest = read_manifest(manifest_path)?;
+    let calendar = calendar(
+        &manifest_path.parent().unwrap().join("calendar.csv"),
+        &manifest,
+    )?;
+    let mut dates = BTreeSet::new();
+    for pair in calendar.windows(2) {
+        let date = pair[0].session_date;
+        let next = pair[1].session_date;
+        if (date.year(), date.month()) != (next.year(), next.month()) {
+            dates.insert(date);
+        }
+    }
+    let last = calendar.last().unwrap().session_date;
+    let next_month = last
+        .with_day(1)
+        .unwrap()
+        .checked_add_months(Months::new(1))
+        .context("Calendar month outside supported date range")?;
+    // To establish the last month's end, the snapshot must cover its entire calendar span.
+    if manifest.end_exclusive >= next_month {
+        dates.insert(last);
+    }
+    Ok(dates)
 }
 
 fn rows(bytes: &[u8], extension: &str) -> Result<Vec<Row>> {

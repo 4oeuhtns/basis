@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use chrono::{DateTime, NaiveDate, Utc};
 use nautilus_common::actor::DataActor;
 use nautilus_model::{
     accounts::Account,
@@ -21,65 +22,9 @@ use nautilus_trading::{
     strategy::{Strategy, StrategyCore},
 };
 use rust_decimal::{Decimal, prelude::ToPrimitive};
-use serde::Serialize;
 
-use super::config::PortfolioConfig;
-use crate::strategy::timestamp;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EquityRow {
-    pub timestamp: String,
-    pub cash: Decimal,
-    pub invested_value: Decimal,
-    pub equity: Decimal,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct HoldingRow {
-    pub timestamp: String,
-    pub instrument_id: String,
-    pub units: Decimal,
-    pub close: Decimal,
-    pub market_value: Decimal,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DecisionLog {
-    pub data_cutoff: String,
-    pub instrument_id: String,
-    pub target_weight: Decimal,
-    pub signal_close: Decimal,
-    pub decision_equity: Decimal,
-    pub reserve_cash: Decimal,
-    pub target_units: i64,
-    pub requested_signed_units: i64,
-    pub submitted_signed_units: i64,
-    pub cash_before_order: Option<Decimal>,
-    pub status: String,
-    pub execution_note: Option<String>,
-    pub executed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FillRow {
-    pub timestamp: String,
-    pub instrument_id: String,
-    pub client_order_id: String,
-    pub side: String,
-    pub units: Decimal,
-    pub price: Decimal,
-    pub commission: Decimal,
-}
-
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct RunState {
-    pub equity: Vec<EquityRow>,
-    pub holdings: Vec<HoldingRow>,
-    pub decisions: Vec<DecisionLog>,
-    pub fills: Vec<FillRow>,
-    pub order_events: Vec<serde_json::Value>,
-    pub errors: Vec<String>,
-}
+use super::state::{DecisionLog, EquityRow, FillRow, HoldingRow, RunState};
+use crate::{config::PortfolioConfig, data::timestamp, research::Anchor};
 
 #[derive(Debug)]
 struct Intent {
@@ -109,11 +54,19 @@ pub struct PortfolioStrategy {
     queue: VecDeque<Intent>,
     active: Option<Active>,
     awaiting_position: bool,
+    month_ends: BTreeSet<NaiveDate>,
+    deferred_trigger: Option<&'static str>,
     state: Rc<RefCell<RunState>>,
 }
 
 impl PortfolioStrategy {
     pub fn new(config: PortfolioConfig, state: Rc<RefCell<RunState>>) -> Result<Self> {
+        config.validate()?;
+        let month_ends = if ["monthly", "optimized"].contains(&config.strategy.as_str()) {
+            crate::data::historical::month_end_dates(config.snapshot_manifest.as_ref().unwrap())?
+        } else {
+            BTreeSet::new()
+        };
         let bar_types = config
             .assets
             .iter()
@@ -134,6 +87,8 @@ impl PortfolioStrategy {
             queue: VecDeque::new(),
             active: None,
             awaiting_position: false,
+            month_ends,
+            deferred_trigger: None,
             state,
         })
     }
@@ -203,6 +158,7 @@ impl PortfolioStrategy {
     }
 
     fn fail(&mut self, error: impl ToString) {
+        self.deferred_trigger = None;
         let mut state = self.state.borrow_mut();
         state.errors.push(error.to_string());
         for intent in self.queue.drain(..) {
@@ -215,15 +171,45 @@ impl PortfolioStrategy {
         }
     }
 
-    fn plan(&mut self) -> Result<()> {
+    fn plan(&mut self, trigger: &str) -> Result<()> {
         let (row, holdings) = self.snapshot()?;
+        if self.config.strategy == "optimized" {
+            let mut state = self.state.borrow_mut();
+            ensure!(
+                state.optimizer_requested.is_none() && state.optimizer_ready.is_none(),
+                "Optimizer already has a pending request/answer"
+            );
+            state.optimizer_requested = Some(Anchor {
+                equity: row,
+                holdings,
+                trigger: trigger.into(),
+            });
+            return Ok(());
+        }
         let weight = self.config.weight()?;
+        let weights = holdings
+            .iter()
+            .map(|h| (h.instrument_id.clone(), weight))
+            .collect();
+        self.plan_weights(row, holdings, &weights, trigger)
+    }
+
+    fn plan_weights(
+        &mut self,
+        row: EquityRow,
+        holdings: Vec<HoldingRow>,
+        weights: &BTreeMap<String, Decimal>,
+        trigger: &str,
+    ) -> Result<()> {
         // Round the reserve UP to cents. Whole-unit targets round DOWN.
         let reserve_cash =
             (row.equity * self.config.reserve()? * Decimal::from(100)).ceil() / Decimal::from(100);
         let mut intents = Vec::new();
         let mut state = self.state.borrow_mut();
         for holding in holdings {
+            let weight = *weights
+                .get(&holding.instrument_id)
+                .context("Missing target weight")?;
             let target = (row.equity * weight / holding.close)
                 .floor()
                 .to_i64()
@@ -236,6 +222,7 @@ impl PortfolioStrategy {
             let index = state.decisions.len();
             state.decisions.push(DecisionLog {
                 data_cutoff: row.timestamp.clone(),
+                trigger: trigger.into(),
                 instrument_id: holding.instrument_id.clone(),
                 target_weight: weight,
                 signal_close: holding.close,
@@ -269,6 +256,71 @@ impl PortfolioStrategy {
             self.pending = Some(intents.into());
         }
         Ok(())
+    }
+
+    fn decision_trigger(&self, index: usize, ts: u64) -> Option<&'static str> {
+        if index == 0 && self.config.strategy != "no_trade" {
+            return Some("initial_allocation");
+        }
+        match self.config.strategy.as_str() {
+            "scheduled" if index.is_multiple_of(self.config.rebalance_every.unwrap()) => {
+                Some("session_interval")
+            }
+            "monthly" | "optimized"
+                if self
+                    .month_ends
+                    .contains(&DateTime::<Utc>::from_timestamp_nanos(ts as i64).date_naive()) =>
+            {
+                Some("month_end")
+            }
+            _ => None,
+        }
+    }
+
+    fn finish_execution(&mut self) -> Result<()> {
+        if self.active.is_none()
+            && !self.awaiting_position
+            && self.queue.is_empty()
+            && self.state.borrow().errors.is_empty()
+            && let Some(trigger) = self.deferred_trigger.take()
+        {
+            // A saved plan executed on month-end. Use the fully updated native ledger.
+            self.plan(trigger)?;
+        }
+        Ok(())
+    }
+
+    fn optimizer_plan_ready(&mut self, ts: u64) -> Result<bool> {
+        let ready = { self.state.borrow_mut().optimizer_ready.take() };
+        let Some(ready) = ready else {
+            return Ok(false);
+        };
+        let now = DateTime::<Utc>::from_timestamp_nanos(ts as i64);
+        let cutoff: DateTime<Utc> = ready.anchor.equity.timestamp.parse()?;
+        if now < ready.available_at || now <= cutoff {
+            self.state.borrow_mut().optimizer_ready = Some(ready);
+            return Ok(true);
+        }
+        ensure!(
+            self.cash()? == ready.anchor.equity.cash,
+            "Stale optimizer answer: cash changed"
+        );
+        for holding in &ready.anchor.holdings {
+            let id = InstrumentId::from(holding.instrument_id.as_str());
+            ensure!(
+                self.portfolio().net_position(&id) == holding.units,
+                "Stale optimizer answer: holdings changed"
+            );
+        }
+        self.state.borrow_mut().optimizer_records[ready.record_index].delivery_status =
+            format!("accepted_at_{}", timestamp(ts));
+        self.plan_weights(
+            ready.anchor.equity,
+            ready.anchor.holdings,
+            &ready.weights,
+            &ready.anchor.trigger,
+        )?;
+        Ok(false)
     }
 
     fn submit_next(&mut self) -> Result<()> {
@@ -384,14 +436,20 @@ impl PortfolioStrategy {
         if !self.state.borrow().errors.is_empty() {
             return Ok(());
         }
+        let trigger = self.decision_trigger(index, ts);
+        if self.config.strategy == "optimized" && self.optimizer_plan_ready(ts)? {
+            if let Some(trigger) = trigger {
+                self.state.borrow_mut().optimizer_events.push(serde_json::json!({"timestamp":timestamp(ts),"trigger":trigger,"status":"skipped_while_waiting_for_available_at"}));
+            }
+            return Ok(());
+        }
         if let Some(plan) = self.pending.take() {
+            self.deferred_trigger = trigger;
             self.queue = plan;
             self.submit_next()?;
-        } else if (self.config.strategy == "buy_and_hold" && index == 0)
-            || (self.config.strategy == "scheduled"
-                && index.is_multiple_of(self.config.rebalance_every))
-        {
-            self.plan()?;
+            self.finish_execution()?;
+        } else if let Some(trigger) = trigger {
+            self.plan(trigger)?;
         }
         Ok(())
     }
@@ -437,10 +495,13 @@ nautilus_strategy!(PortfolioStrategy, {
         if let Err(error) = self.record_snapshot() {
             self.fail(error);
         }
-        if self.state.borrow().errors.is_empty()
-            && let Err(error) = self.submit_next()
-        {
-            self.fail(error);
+        if self.state.borrow().errors.is_empty() {
+            if let Err(error) = self.submit_next() {
+                self.fail(error);
+            }
+            if let Err(error) = self.finish_execution() {
+                self.fail(error);
+            }
         }
     }
 
@@ -481,13 +542,22 @@ impl DataActor for PortfolioStrategy {
     }
 
     fn on_stop(&mut self) -> Result<()> {
+        let ready = { self.state.borrow_mut().optimizer_ready.take() };
+        if let Some(ready) = ready {
+            self.state.borrow_mut().optimizer_records[ready.record_index].delivery_status =
+                "expired_end_of_data".into();
+        }
         if let Some(plan) = self.pending.take() {
             for intent in plan {
                 self.state.borrow_mut().decisions[intent.log_index].status =
                     "expired_end_of_data".into();
             }
         }
-        if self.active.is_some() || !self.queue.is_empty() || self.awaiting_position {
+        if self.active.is_some()
+            || !self.queue.is_empty()
+            || self.awaiting_position
+            || self.deferred_trigger.is_some()
+        {
             self.fail("Unsettled final portfolio order");
         }
         if let Err(error) = self.record_snapshot() {

@@ -1,4 +1,4 @@
-//! Shared Nautilus plumbing. Both lessons use the same native cash account.
+//! Native Nautilus venue, instruments, and ledger reports used by both runners.
 use anyhow::{Context, Result};
 use nautilus_backtest::{
     config::{BacktestEngineConfig, SimulatedVenueConfig},

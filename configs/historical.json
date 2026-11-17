@@ -7,11 +7,10 @@
     {"symbol": "SPY", "data_path": "../runs/snapshots/spy-qqq-2025/SPY.parquet"},
     {"symbol": "QQQ", "data_path": "../runs/snapshots/spy-qqq-2025/QQQ.parquet"}
   ],
-  "strategy": "scheduled",
+  "strategy": "monthly",
   "starting_cash": "10000.00",
   "cash_reserve": "0.10",
   "fee_bps": "0",
-  "rebalance_every": 21,
   "execution": "next_session_close",
   "output_root": "../runs"
 }

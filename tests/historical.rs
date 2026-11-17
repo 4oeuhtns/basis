@@ -8,19 +8,16 @@ use std::{
 
 use nautilus_model::types::{Currency, Money};
 use qflab_backtest::{
-    data::sha256,
-    portfolio::{
-        PortfolioSnapshot,
-        config::{Asset, PortfolioConfig},
-        runner::{self, Simulation},
-    },
+    backtest::{self, Simulation},
+    config::{Asset, PortfolioConfig},
+    data::{PortfolioSnapshot, sha256},
 };
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 
 fn config(root: &Path, extension: &str) -> PortfolioConfig {
     let mut config = PortfolioConfig::load(Path::new("configs/portfolio.json")).unwrap();
-    config.data_kind = qflab_backtest::historical::KIND.into();
+    config.data_kind = qflab_backtest::data::historical::KIND.into();
     config.snapshot_manifest = Some(root.join("manifest.json"));
     config.assets = ["ALPHA", "BETA"]
         .into_iter()
@@ -118,8 +115,8 @@ fn historical_formats_have_identical_execution_and_frozen_replay() {
         "2025-07-03T17:00:00+00:00"
     );
     assert_eq!(parquet.assets["ALPHA"].sessions[0].volume, 1_600_000_000);
-    let from_parquet = runner::simulate(&parquet_config, &parquet).unwrap();
-    let from_csv = runner::simulate(&csv_config, &csv).unwrap();
+    let from_parquet = backtest::simulate(&parquet_config, &parquet).unwrap();
+    let from_csv = backtest::simulate(&csv_config, &csv).unwrap();
     assert!(
         from_parquet.state.errors.is_empty(),
         "{:?}",
@@ -139,14 +136,14 @@ fn historical_formats_have_identical_execution_and_frozen_replay() {
 
     let mut fees = parquet_config.clone();
     fees.fee_bps = "25".into();
-    let paid = runner::simulate(&fees, &parquet).unwrap();
+    let paid = backtest::simulate(&fees, &parquet).unwrap();
     assert!(paid.state.errors.is_empty(), "{:?}", paid.state.errors);
     check_ledger(&paid);
 
     let recipe = root.join("config.json");
     fs::write(&recipe, serde_json::to_vec(&parquet_config).unwrap()).unwrap();
-    let output = runner::run(&recipe).unwrap();
-    let replay = runner::run(&output.join("config.json")).unwrap();
+    let output = backtest::run(&recipe).unwrap();
+    let replay = backtest::run(&output.join("config.json")).unwrap();
     for file in [
         "summary.json",
         "equity.csv",

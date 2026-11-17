@@ -5,10 +5,7 @@ use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    config::{Config, decimal},
-    data::Snapshot,
-};
+use crate::{config::decimal, data::Snapshot, demo::Config};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

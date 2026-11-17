@@ -1,4 +1,10 @@
-//! Run and preserve the two-fund experiment, using the same Nautilus plumbing as lesson one.
+//! Portfolio backtests: configure Nautilus, advance sessions, and preserve run evidence.
+pub mod comparison;
+pub(crate) mod engine;
+mod state;
+mod strategy;
+
+pub use state::{DecisionLog, EquityRow, FillRow, HoldingRow, RunState};
 use std::{
     cell::RefCell,
     fs,
@@ -8,20 +14,16 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use chrono::Utc;
 use rust_decimal::Decimal;
 use serde_json::json;
 
-use super::{
-    PortfolioSnapshot,
-    config::PortfolioConfig,
-    strategy::{PortfolioStrategy, RunState},
-};
 use crate::{
-    data::sha256,
-    engine::{self, Reports},
-    runner::{NAUTILUS_VERSION, command_output, compiled_source_hash, write_csv, write_json},
+    config::PortfolioConfig,
+    data::{PortfolioSnapshot, sha256},
+    output::{self, create_run_directory, write_csv, write_json, write_reports},
 };
+pub use engine::Reports;
+use strategy::PortfolioStrategy;
 
 #[derive(Debug)]
 pub struct Simulation {
@@ -30,7 +32,21 @@ pub struct Simulation {
 }
 
 pub fn simulate(config: &PortfolioConfig, snapshot: &PortfolioSnapshot) -> Result<Simulation> {
-    snapshot.validate(config)?;
+    let bars = snapshot.bars(config)?;
+    let indices = snapshot.trading_indices(config);
+    ensure!(
+        indices.len() >= 2,
+        "At least two trading sessions are required"
+    );
+    let replay = if let Some(settings) = &config.optimizer {
+        ensure!(
+            indices[0] >= settings.lookback_returns,
+            "Insufficient warmup before trading_start"
+        );
+        crate::research::replay(settings.replay_path.as_deref())?
+    } else {
+        None
+    };
     let mut engine = engine::new_engine(config.cash()?, config.fee_bps()?)?;
     for asset in &config.assets {
         engine.add_instrument(&engine::equity_with_precision(
@@ -40,18 +56,70 @@ pub fn simulate(config: &PortfolioConfig, snapshot: &PortfolioSnapshot) -> Resul
     }
     let state = Rc::new(RefCell::new(RunState::default()));
     engine.add_strategy(PortfolioStrategy::new(config.clone(), Rc::clone(&state))?)?;
-    engine.add_data(snapshot.bars(config)?, None, true, true)?;
-    if let Err(error) = engine.run(None, None, None, false) {
-        state
-            .borrow_mut()
-            .errors
-            .push(format!("Engine failure: {error}"));
+    if config.optimizer.is_some() {
+        // Every batch contains the full same-timestamp cross-section. Pause before calling Python.
+        for frame in bars.chunks(config.assets.len()) {
+            engine.clear_data();
+            engine.add_data(frame.to_vec(), None, true, true)?;
+            if let Err(error) = engine.run(None, None, None, true) {
+                state
+                    .borrow_mut()
+                    .errors
+                    .push(format!("Engine failure: {error}"));
+                break;
+            }
+            if !state.borrow().errors.is_empty() {
+                break;
+            }
+            let anchor = { state.borrow_mut().optimizer_requested.take() };
+            if let Some(anchor) = anchor {
+                let workspace = config.output_root.join(".optimizer-work");
+                fs::create_dir_all(&workspace)?;
+                let result = crate::research::coordinate(
+                    config,
+                    snapshot,
+                    anchor,
+                    &mut state.borrow_mut(),
+                    replay.as_deref(),
+                    &workspace,
+                );
+                if let Err(error) = result {
+                    state
+                        .borrow_mut()
+                        .errors
+                        .push(format!("Optimizer protocol failure: {error:#}"));
+                    break;
+                }
+            }
+        }
+        if let Err(error) = engine.end() {
+            state
+                .borrow_mut()
+                .errors
+                .push(format!("Engine finalization failure: {error}"));
+        }
+        if let Some(replay) = replay
+            && state.borrow().optimizer_records.len() != replay.len()
+        {
+            state
+                .borrow_mut()
+                .errors
+                .push("Replay contains unmatched optimizer records".into());
+        }
+    } else {
+        engine.add_data(bars, None, true, true)?;
+        if let Err(error) = engine.run(None, None, None, false) {
+            state
+                .borrow_mut()
+                .errors
+                .push(format!("Engine failure: {error}"));
+        }
     }
     let reports = engine::reports(&engine)?;
     engine.dispose();
     let mut state = state.borrow().clone();
-    if state.equity.len() != snapshot.session_count()
-        || state.holdings.len() != snapshot.session_count() * config.assets.len()
+    if state.equity.len() != indices.len()
+        || state.holdings.len() != indices.len() * config.assets.len()
     {
         state
             .errors
@@ -61,22 +129,22 @@ pub fn simulate(config: &PortfolioConfig, snapshot: &PortfolioSnapshot) -> Resul
 }
 
 pub fn run(config_path: &Path) -> Result<PathBuf> {
+    run_config(PortfolioConfig::load(config_path)?)
+}
+
+pub fn run_config(config: PortfolioConfig) -> Result<PathBuf> {
     let started = Instant::now();
-    let config = PortfolioConfig::load(config_path)?;
+    config.validate()?;
     let snapshot = PortfolioSnapshot::load(&config)?;
-    fs::create_dir_all(&config.output_root)?;
-    let run_id = format!(
-        "{}-{}",
-        Utc::now().format("%Y%m%dT%H%M%S%.9fZ"),
-        std::process::id()
-    );
-    let output = config.output_root.canonicalize()?.join(&run_id);
-    fs::create_dir(&output)?;
+    let output = create_run_directory(&config.output_root, "")?;
     let mut frozen = config.clone();
     frozen.output_root = PathBuf::from("..");
+    if let Some(settings) = &mut frozen.optimizer {
+        settings.replay_path = Some(PathBuf::from("solver_replay.json"));
+    }
     let mut hashes = std::collections::BTreeMap::new();
     if let Some(path) = &config.snapshot_manifest {
-        crate::historical::copy_snapshot(path, &output.join("snapshot"))?;
+        crate::data::historical::copy_snapshot(path, &output.join("snapshot"))?;
         frozen.snapshot_manifest = Some(PathBuf::from("snapshot/manifest.json"));
     }
     for asset in &mut frozen.assets {
@@ -92,23 +160,14 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
     }
     write_json(&output.join("config.json"), &frozen)?;
     write_json(&output.join("resolved_config.json"), &config)?;
-    fs::write(
-        output.join("Cargo.lock"),
-        include_bytes!("../../Cargo.lock"),
-    )?;
-    let mut manifest = json!({
-        "schema_version": 1, "mode": "portfolio", "run_id": run_id, "status": "running",
-        "created_at_utc": Utc::now().to_rfc3339(), "nautilus_rust_version": NAUTILUS_VERSION,
-        "rustc": command_output("rustc", &["--version"]),
-        "git_commit": command_output("git", &["rev-parse", "HEAD"]),
-        "git_status": command_output("git", &["status", "--porcelain"]),
-        "config_sha256": sha256(&serde_json::to_vec(&frozen)?), "snapshot_sha256": hashes,
-        "resolved_config_sha256": sha256(&serde_json::to_vec(&config)?),
-        "compiled_source_sha256": compiled_source_hash(),
-        "cargo_lock_sha256": sha256(include_bytes!("../../Cargo.lock")),
-        "os": std::env::consts::OS, "architecture": std::env::consts::ARCH,
-        "session_count": snapshot.session_count(),
-        "assumptions": {
+    let trading_sessions = snapshot.trading_indices(&config).len();
+    let mut manifest = output::manifest(&output, &frozen, &config)?;
+    manifest["mode"] = json!("portfolio");
+    manifest["snapshot_sha256"] = json!(hashes);
+    manifest["session_count"] = json!(trading_sessions);
+    manifest["warmup_session_count"] = json!(snapshot.session_count() - trading_sessions);
+    manifest["trading_start"] = json!(config.trading_start);
+    manifest["assumptions"] = json!({
             "prices": "fabricated synthetic total-return units; USD cents; no extra dividends",
             "calendar": "consecutive Mon–Fri at 21:00 UTC; no exchange holiday/DST model",
             "timestamps": "ts_event = ts_init = completed close; every asset must share every session",
@@ -125,11 +184,11 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
             "terminal_positions": "held and marked at final close; no forced liquidation",
             "reporting": "equity = native USD cash + sum(native units * synchronized close)",
             "evaluation": "teaching fixture only; no performance inference; no Python/quantum signal yet"
-        }
     });
     if let Some(path) = &config.snapshot_manifest {
-        manifest["historical_snapshot"] = serde_json::from_slice(&fs::read(path)?)?;
-        manifest["historical_manifest_sha256"] = json!(sha256(&fs::read(path)?));
+        let bytes = fs::read(path)?;
+        manifest["historical_snapshot"] = serde_json::from_slice(&bytes)?;
+        manifest["historical_manifest_sha256"] = json!(sha256(&bytes));
         manifest["assumptions"]["prices"] = json!(
             "retrospective adjusted research units; USD; six decimal marks; no separate dividends/splits"
         );
@@ -140,6 +199,15 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
         );
         manifest["assumptions"]["evaluation"] = json!(
             "historical plumbing baseline; retrospective adjustments; no point-in-time data or strategy-performance claim"
+        );
+    }
+    if ["monthly", "optimized"].contains(&config.strategy.as_str()) {
+        let mut dates =
+            crate::data::historical::month_end_dates(config.snapshot_manifest.as_ref().unwrap())?;
+        dates.retain(|date| config.trading_start.is_none_or(|start| *date >= start));
+        manifest["month_end_dates"] = json!(dates);
+        manifest["assumptions"]["schedule"] = json!(
+            "initial allocation at first close; rebalance at calendar month-end closes; next-session-close execution; partial final calendar month excluded"
         );
     }
     let manifest_path = output.join("manifest.json");
@@ -154,24 +222,23 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
         }
     };
     let state = &simulation.state;
+    if config.optimizer.is_some() {
+        write_json(&output.join("optimizer_log.json"), &state.optimizer_records)?;
+        write_json(&output.join("solver_replay.json"), &state.optimizer_records)?;
+        write_json(
+            &output.join("optimizer_events.json"),
+            &state.optimizer_events,
+        )?;
+        manifest["assumptions"]["optimizer"] = json!(
+            "past-only sequential exact enumeration outside engine callbacks; explicit simulated delay; invalid/failed/timed-out worker retains holdings; frozen responses replay without Python"
+        );
+    }
     write_csv(&output.join("equity.csv"), &state.equity)?;
     write_csv(&output.join("holdings.csv"), &state.holdings)?;
     write_json(&output.join("fills.json"), &state.fills)?;
     write_json(&output.join("decision_log.json"), &state.decisions)?;
     write_json(&output.join("order_events.json"), &state.order_events)?;
-    write_json(&output.join("orders.json"), &simulation.reports.orders)?;
-    write_json(
-        &output.join("positions.json"),
-        &simulation.reports.positions,
-    )?;
-    write_json(
-        &output.join("account_events.json"),
-        &simulation.reports.account_events,
-    )?;
-    write_json(
-        &output.join("engine_result.json"),
-        &simulation.reports.engine_result,
-    )?;
+    write_reports(&output, &simulation.reports)?;
     let last = state.equity.last().context("No final portfolio snapshot")?;
     let holdings: Vec<_> = state
         .holdings
@@ -186,6 +253,8 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
             "ending_equity": last.equity, "ending_holdings": holdings,
             "net_pnl": last.equity - config.cash()?, "total_fees": fees,
             "fill_count": state.fills.len(), "errors": state.errors,
+            "optimizer_decisions": state.optimizer_records.len(),
+            "optimizer_fallbacks": state.optimizer_records.iter().filter(|r|r.status=="fallback").count(),
         }),
     )?;
     manifest["status"] = json!(if state.errors.is_empty() {
@@ -199,14 +268,16 @@ pub fn run(config_path: &Path) -> Result<PathBuf> {
         "Starting cash: ${:.2}\nEnding cash:   ${:.2}\nEnding equity: ${:.2}\nFees paid:     ${:.2}\nFills:         {}",
         config.cash()?,
         last.cash,
-        last.equity,
+        last.equity.round_dp(2),
         fees,
         state.fills.len()
     );
     for holding in holdings {
         println!(
             "{}: {} units @ ${:.2}",
-            holding.instrument_id, holding.units, holding.close
+            holding.instrument_id,
+            holding.units,
+            holding.close.round_dp(2)
         );
     }
     println!("Run saved:     {}", output.display());
