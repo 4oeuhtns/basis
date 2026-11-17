@@ -12,9 +12,14 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.14,<1"]
 data = ["yfinance==1.7.0", "exchange-calendars==4.13.1", "pandas==3.0.6", "pyarrow==26.0.0"]
+# CUDA-Q needs Python 3.12 or 3.13; install it in its own environment (see README).
+quantum = ["cudaq==0.17.0", "numpy==2.5.5", "scipy==1.18.1"]
 
 [tool.setuptools.packages.find]
 include = ["qflab*"]
+
+[tool.setuptools.package-data]
+qflab = ["ui/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -25,3 +30,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Gate names inside @cudaq.kernel functions (ry, x, mz, ...) are resolved by the kernel compiler.
+"qflab/backends/cudaq_backend.py" = ["F821"]

@@ -42,6 +42,16 @@ def energy(model: dict, selected: tuple[str, ...] | list[str]) -> int:
     )
 
 
+def target_weights(symbols: list[str], selected, reserve: Decimal) -> dict[str, str]:
+    """Equal weights for the selected funds; together they sum to exactly 1 - reserve."""
+    k = len(selected)
+    unit = ((1 - reserve) / k).quantize(Decimal("0.000000000001"), rounding=ROUND_DOWN)
+    weights = {s: "0" for s in symbols}
+    for i, symbol in enumerate(selected):
+        weights[symbol] = str(unit if i < k - 1 else 1 - reserve - unit * (k - 1))
+    return weights
+
+
 def solve_request(request: dict, request_hash: str) -> dict:
     with localcontext() as context:
         context.prec = 50
@@ -171,10 +181,7 @@ def _solve(request: dict, request_hash: str) -> dict:
         (energy(model, selection), selection) for selection in itertools.combinations(symbols, k)
     ]
     best_energy, selected = min(candidates)  # Lexicographic tie-break; no randomness.
-    unit = weight.quantize(Decimal("0.000000000001"), rounding=ROUND_DOWN)
-    weights = {s: "0" for s in symbols}
-    for i, symbol in enumerate(selected):
-        weights[symbol] = str(unit if i < k - 1 else 1 - reserve - unit * (k - 1))
+    weights = target_weights(symbols, selected, reserve)
     return {
         "schema_version": 1,
         "method": "exact_enumeration",

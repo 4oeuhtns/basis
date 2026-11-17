@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "mode": "portfolio",
+  "data_kind": "historical_adjusted_research_units",
+  "snapshot_manifest": "../runs/snapshots/eight-etf-2024warmup-2025/manifest.json",
+  "assets": [
+    {"symbol":"SPY","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/SPY.parquet"},
+    {"symbol":"QQQ","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/QQQ.parquet"},
+    {"symbol":"IWM","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/IWM.parquet"},
+    {"symbol":"EFA","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/EFA.parquet"},
+    {"symbol":"EEM","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/EEM.parquet"},
+    {"symbol":"TLT","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/TLT.parquet"},
+    {"symbol":"GLD","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/GLD.parquet"},
+    {"symbol":"VNQ","data_path":"../runs/snapshots/eight-etf-2024warmup-2025/VNQ.parquet"}
+  ],
+  "strategy":"optimized",
+  "trading_start":"2025-01-01",
+  "starting_cash":"10000.00",
+  "cash_reserve":"0.10",
+  "fee_bps":"10",
+  "execution":"next_session_close",
+  "output_root":"../runs",
+  "optimizer":{
+    "python_path":"../.tools/cudaq-venv/bin/python",
+    "select_count":3,
+    "lookback_returns":60,
+    "forecast_horizon_sessions":21,
+    "risk_aversion":"3",
+    "turnover_penalty":"0.001",
+    "simulated_delay_seconds":60,
+    "timeout_seconds":120,
+    "solver":{
+      "method":"qaoa_cudaq",
+      "layers":2,
+      "shots":1024,
+      "final_shots":2048,
+      "grid":12,
+      "maxiter":40,
+      "seed":20261116,
+      "penalty_scale":"1",
+      "target":"qpp-cpu"
+    }
+  }
+}

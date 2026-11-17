@@ -93,13 +93,17 @@ pub fn build_request(
         .map(|h| (h.instrument_id.clone(), h.units.to_string()))
         .collect();
     let symbols: Vec<_> = holdings.keys().cloned().collect();
-    Ok(
-        json!({"schema_version":1, "data_cutoff":anchor.equity.timestamp, "symbols":symbols,
+    let mut request = json!({"schema_version":1, "data_cutoff":anchor.equity.timestamp, "symbols":symbols,
         "cash":anchor.equity.cash, "equity":anchor.equity.equity, "holdings":holdings, "history":history,
         "settings":{"select_count":settings.select_count,"lookback_returns":settings.lookback_returns,
             "forecast_horizon_sessions":settings.forecast_horizon_sessions,"risk_aversion":settings.risk_aversion,
-            "turnover_penalty":settings.turnover_penalty,"cash_reserve":config.cash_reserve}}),
-    )
+            "turnover_penalty":settings.turnover_penalty,"cash_reserve":config.cash_reserve}});
+    // The exact solver's request is unchanged, so its saved replays keep their hashes. A
+    // quantum solver adds only its search settings; forecasts and constraints stay identical.
+    if let Some(solver) = &settings.solver {
+        request["solver"] = serde_json::to_value(solver)?;
+    }
+    Ok(request)
 }
 
 pub fn validate_response(
@@ -108,11 +112,19 @@ pub fn validate_response(
     hash: &str,
     response: &Value,
 ) -> Result<BTreeMap<String, Decimal>> {
+    let settings = config
+        .optimizer
+        .as_ref()
+        .context("Missing optimizer settings")?;
     ensure!(
-        response["schema_version"] == 1
-            && response["method"] == "exact_enumeration"
-            && response["status"] == "feasible",
-        "Unsupported optimizer response"
+        response["schema_version"] == 1 && response["method"] == settings.method(),
+        "Unsupported optimizer response: expected method {}",
+        settings.method()
+    );
+    ensure!(
+        response["status"] == "feasible",
+        "Optimizer returned no usable portfolio: status {}",
+        response["status"]
     );
     ensure!(
         response["request_sha256"] == hash && response["data_cutoff"] == request["data_cutoff"],
@@ -135,7 +147,7 @@ pub fn validate_response(
         .filter(|(_, w)| **w > Decimal::ZERO)
         .map(|(s, _)| s.clone())
         .collect();
-    let k = config.optimizer.as_ref().unwrap().select_count;
+    let k = settings.select_count;
     let invested = Decimal::ONE - config.reserve()?;
     let target = invested / Decimal::from(k as u64);
     ensure!(
@@ -153,7 +165,7 @@ pub fn validate_response(
 
 fn worker(settings: &OptimizerConfig, request: &[u8], workspace: &Path) -> Result<Value> {
     let start = Instant::now();
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("qflab/optimizer_worker.py");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join(settings.worker_script());
     let mut child = Command::new(&settings.python_path)
         .arg("-I")
         .arg(script)

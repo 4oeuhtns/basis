@@ -164,9 +164,75 @@ pub struct OptimizerConfig {
     pub timeout_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_path: Option<PathBuf>,
+    /// Absent: exact enumeration. Present: the named search method solves the same model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver: Option<SolverConfig>,
+}
+
+/// Settings forwarded verbatim to the quantum worker inside each request.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolverConfig {
+    pub method: String,
+    pub layers: usize,
+    pub shots: usize,
+    pub final_shots: usize,
+    pub grid: usize,
+    pub maxiter: usize,
+    pub seed: u64,
+    pub penalty_scale: String,
+    pub target: String,
+}
+
+impl SolverConfig {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.method == "qaoa_cudaq",
+            "Unsupported solver method; omit solver for exact enumeration"
+        );
+        ensure!(
+            (1..=5).contains(&self.layers)
+                && (100..=100_000).contains(&self.shots)
+                && (100..=1_000_000).contains(&self.final_shots)
+                && (2..=64).contains(&self.grid)
+                && (1..=500).contains(&self.maxiter)
+                && self.seed < 2_147_483_648,
+            "Unsupported QAOA layers/shots/grid/maxiter/seed"
+        );
+        let scale = decimal(&self.penalty_scale, "penalty_scale")?;
+        ensure!(
+            scale > Decimal::ZERO && scale <= Decimal::from(100),
+            "penalty_scale must be in (0, 100]"
+        );
+        ensure!(
+            !self.target.is_empty()
+                && self
+                    .target
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+            "Unsupported simulator target name"
+        );
+        Ok(())
+    }
 }
 
 impl OptimizerConfig {
+    /// The method name every accepted response must carry.
+    pub fn method(&self) -> &str {
+        self.solver
+            .as_ref()
+            .map_or("exact_enumeration", |solver| solver.method.as_str())
+    }
+
+    /// Worker file inside `qflab/`, chosen by method.
+    pub fn worker_script(&self) -> &'static str {
+        if self.solver.is_some() {
+            "qflab/qaoa_worker.py"
+        } else {
+            "qflab/optimizer_worker.py"
+        }
+    }
+
     pub fn validate(&self, count: usize) -> Result<()> {
         ensure!(
             (2..=16).contains(&count) && (1..=count).contains(&self.select_count),
@@ -184,10 +250,16 @@ impl OptimizerConfig {
                     .contains(&decimal(&self.turnover_penalty, "turnover_penalty")?),
             "Invalid optimizer risk/turnover parameter"
         );
+        // Circuit simulation is slower than enumeration, so a quantum solver may wait longer.
+        let longest = if self.solver.is_some() { 600 } else { 60 };
         ensure!(
-            (1..=60).contains(&self.timeout_seconds) && self.simulated_delay_seconds <= 604_800,
-            "Worker timeout must be 1–60 seconds; simulated delay at most seven days"
+            (1..=longest).contains(&self.timeout_seconds)
+                && self.simulated_delay_seconds <= 604_800,
+            "Worker timeout must be 1–{longest} seconds; simulated delay at most seven days"
         );
+        if let Some(solver) = &self.solver {
+            solver.validate()?;
+        }
         Ok(())
     }
 }

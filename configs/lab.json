@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "name": "core",
+  "seed": 20261116,
+  "quantum": {"target": "qpp-cpu"},
+  "risk_lab": {
+    "call": {"spot": 100.0, "strike": 105.0, "rate": 0.03, "volatility": 0.2, "maturity": 1.0},
+    "truncation_std": 3.0,
+    "confidence": 0.95,
+    "reference_qubits": 5,
+    "seeds": 30,
+    "iqae": {"epsilons": [0.05, 0.02, 0.01, 0.005, 0.002, 0.001], "shots": 100},
+    "sweep_epsilon": 0.005,
+    "monte_carlo_samples": [100, 1000, 10000, 100000, 1000000],
+    "sobol": {"samples_per_replicate": [8, 32, 128, 512, 2048], "replicates": 16},
+    "grid_qubits": [2, 3, 4, 5, 6, 7],
+    "strikes": [90.0, 105.0, 120.0],
+    "noise": {"qubits": 2, "two_qubit_depolarizing": [0.0, 0.0005, 0.002, 0.01], "epsilon": 0.01, "seeds": 20}
+  },
+  "portfolio": {
+    "exact_config": "optimized.json",
+    "qaoa_config": "optimized_qaoa.json",
+    "fee_bps_sensitivity": ["0", "10", "25"]
+  },
+  "qaoa_study": {
+    "decisions": "all",
+    "layers": [1, 2, 3],
+    "penalty_scales": ["1", "0.1"],
+    "seeds": 2,
+    "shots": 1024,
+    "final_shots": 2048,
+    "grid": 12,
+    "maxiter": 40,
+    "swap_search": {"seeds": 200, "max_evaluations": 56}
+  },
+  "risk_forecast": {
+    "threshold": 0.05,
+    "qubits": 5,
+    "truncation_std": 4.0,
+    "epsilon": 0.005,
+    "alpha": 0.05,
+    "shots": 100,
+    "monte_carlo_samples": 10000
+  }
+}

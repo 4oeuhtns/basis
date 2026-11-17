@@ -9,6 +9,7 @@ import json
 import math
 import sys
 from datetime import UTC, datetime
+from decimal import ROUND_CEILING, Decimal
 from importlib.metadata import distributions, version
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,16 +21,27 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
-def compile_qubo(financial: dict) -> dict:
-    """Expand F(x) + A(sum(x)-K)^2 using exact integer coefficients."""
+def compile_qubo(financial: dict, penalty_scale: str = "1") -> dict:
+    """Expand F(x) + A(sum(x)-K)^2 using exact integer coefficients.
+
+    ``penalty_scale`` multiplies the provably sufficient penalty. Values below one are a
+    declared experiment: infeasible bitstrings may then score better than feasible ones, so
+    every sampled outcome must still be checked for feasibility independently.
+    """
     symbols, k = financial["symbols"], financial["select_count"]
+    if not isinstance(penalty_scale, str):
+        raise ValueError("penalty_scale must be a decimal string")
+    scale = Decimal(penalty_scale)
+    if not scale.is_finite() or not 0 < scale <= 100:
+        raise ValueError("penalty_scale must be in (0, 100]")
     # The financial score's entire range is at most this sum of absolute coefficients.
     # One unit more makes every infeasible state worse than every feasible state.
-    penalty = (
+    sufficient = (
         1
         + sum(abs(int(v)) for v in financial["linear"].values())
         + sum(abs(int(p["coefficient"])) for p in financial["pairs"])
     )
+    penalty = max(1, int((scale * sufficient).to_integral_value(rounding=ROUND_CEILING)))
     pairs = {(p["left"], p["right"]): int(p["coefficient"]) for p in financial["pairs"]}
     return {
         "schema_version": 1,
@@ -47,8 +59,12 @@ def compile_qubo(financial: dict) -> dict:
     }
 
 
-def verify_qubo(financial: dict, qubo: dict) -> dict:
-    """Exhaustively check the penalty and the x=(1-z)/2 Ising translation."""
+def verify_qubo(financial: dict, qubo: dict, require_dominance: bool = True) -> dict:
+    """Exhaustively check the penalty and the x=(1-z)/2 Ising translation.
+
+    With ``require_dominance`` a penalty that lets any infeasible state beat a feasible one is
+    an error; without it the audit records that fact and continues.
+    """
     symbols, k = financial["symbols"], financial["select_count"]
     constant = int(qubo["constant"])
     linear = {s: int(v) for s, v in qubo["linear"].items()}
@@ -76,14 +92,15 @@ def verify_qubo(financial: dict, qubo: dict) -> dict:
         if score != expected or ising4 != 4 * score:
             raise ValueError("QUBO/Ising translation does not match the financial model")
         (feasible if len(chosen) == k else infeasible).append(score)
-    if min(infeasible) <= max(feasible):
+    dominates = min(infeasible) > max(feasible)
+    if require_dominance and not dominates:
         raise ValueError("Cardinality penalty is insufficient")
     best_feasible = min(feasible)
     return {
         "binary_states_checked": 2 ** len(symbols),
         "feasible_states": len(feasible),
         "qubo_and_ising_match": True,
-        "all_infeasible_states_are_worse": True,
+        "all_infeasible_states_are_worse": dominates,
         "best_feasible_integer": str(best_feasible),
         "worst_feasible_integer": str(max(feasible)),
         "best_infeasible_integer": str(min(infeasible)),

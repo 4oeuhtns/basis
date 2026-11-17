@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quantum Finance Lab tearsheet</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.04);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300;
+  --s7: #6250d6; --s8: #e34948; --neutral: #898781;
+  --o1: #86b6ef; --o2: #2a78d6; --o3: #104281;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --good-text: #006300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.05);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c;
+    --s7: #9085e9; --s8: #e66767; --neutral: #898781;
+    --o1: #86b6ef; --o2: #3987e5; --o3: #184f95;
+    --good-text: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.05);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c;
+  --s7: #9085e9; --s8: #e66767; --neutral: #898781;
+  --o1: #86b6ef; --o2: #3987e5; --o3: #184f95;
+  --good-text: #0ca30c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+header.top { padding: 28px 0 12px; }
+header.top .row { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+h1 { font-size: 26px; line-height: 1.2; margin: 0 0 6px; font-weight: 650; letter-spacing: -.01em; text-wrap: balance; }
+h2 { font-size: 19px; margin: 32px 0 4px; font-weight: 650; text-wrap: balance; }
+h3 { font-size: 15px; margin: 0; font-weight: 650; }
+p { margin: 6px 0; }
+.lede { color: var(--ink2); max-width: 78ch; }
+.meta { color: var(--ink2); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; }
+.meta b { color: var(--ink); font-weight: 600; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+button { font: inherit; color: inherit; }
+.ghost { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.ghost:hover { background: var(--wash); }
+:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+nav.tabs { position: sticky; top: 0; z-index: 5; background: var(--page); border-bottom: 1px solid var(--border); }
+nav.tabs .wrap { display: flex; gap: 2px; overflow-x: auto; }
+nav.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 12px 14px 10px;
+  cursor: pointer; color: var(--ink2); white-space: nowrap; font-weight: 550; }
+nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+nav.tabs button:hover { color: var(--ink); }
+main { padding: 8px 0 64px; }
+section.tab[hidden] { display: none; }
+.grid { display: grid; gap: 16px; margin-top: 14px; }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .g3, .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .g2, .g3, .g4 { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+section.tab > .card, section.tab > .grid + .grid { margin-top: 16px; }
+.card > .sub { color: var(--ink2); font-size: 13px; margin: 2px 0 8px; max-width: 80ch; }
+.tile .label { color: var(--ink2); font-size: 13px; }
+.tile .value { font-size: 28px; font-weight: 650; line-height: 1.15; margin: 4px 0 2px; letter-spacing: -.01em; }
+.tile .foot { color: var(--ink2); font-size: 13px; }
+.note { color: var(--ink2); font-size: 13px; max-width: 86ch; }
+.callout { border-left: 3px solid var(--axis); padding: 2px 0 2px 12px; margin: 12px 0; color: var(--ink2); max-width: 86ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--ink2); margin: 4px 0 2px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key { display: inline-block; width: 14px; height: 0; border-top: 2px solid; }
+.key.box { height: 10px; width: 10px; border: 0; border-radius: 2px; }
+.key.dot { height: 8px; width: 8px; border: 0; border-radius: 50%; }
+svg.chart { display: block; width: 100%; overflow: visible; touch-action: pan-y; }
+svg.chart text { font: 11.5px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); font-variant-numeric: tabular-nums; }
+svg.chart text.lab { fill: var(--ink2); }
+svg.chart text.direct { fill: var(--ink2); font-size: 12px; }
+details.data { margin-top: 8px; font-size: 12.5px; }
+details.data summary { cursor: pointer; color: var(--ink2); width: fit-content; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink2); font-weight: 550; white-space: nowrap; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 14px; }
+tr:last-child td { border-bottom: 0; }
+.nowrap td { white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--ink2); white-space: nowrap; }
+.chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 550; }
+.status svg { flex: none; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; padding: 6px 14px; cursor: pointer; color: var(--ink2); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 14px 0 0; }
+.controls label { color: var(--ink2); font-size: 13px; }
+.matrix { display: grid; gap: 2px; align-items: center; font-size: 12px; color: var(--ink2); margin-top: 8px; }
+.matrix .cell { height: 22px; border-radius: 4px; background: var(--wash); position: relative; }
+.matrix .cell.on { background: var(--fill); }
+.matrix .cell.other::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; border: 2px solid var(--ink); }
+.matrix .head { text-align: center; font-variant-numeric: tabular-nums; }
+.matrix .rowname { padding-right: 8px; color: var(--ink); font-weight: 550; }
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; max-width: 300px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.16); }
+.tip .t { color: var(--ink2); margin-bottom: 4px; }
+.tip .r { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.tip .r b { font-weight: 650; font-variant-numeric: tabular-nums; }
+.tip .r span.n { color: var(--ink2); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; }
+.kv dt { color: var(--ink2); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+pre { background: var(--wash); border-radius: 8px; padding: 12px; overflow: auto; max-height: 420px; font-size: 12px; margin: 8px 0 0; }
+.bar { height: 8px; border-radius: 4px; background: var(--wash); position: relative; min-width: 80px; }
+.bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--s1); }
+ul.plain { margin: 6px 0; padding-left: 18px; max-width: 86ch; } ul.plain li { margin: 4px 0; }
+.empty { color: var(--ink2); padding: 24px 0; }
+footer { color: var(--muted); font-size: 12.5px; padding: 24px 0 48px; }
+@media print { nav.tabs { position: static; } section.tab[hidden] { display: block; } .ghost, .seg { display: none; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="row">
+    <div>
+      <h1>Quantum Finance Lab</h1>
+      <p class="lede">One reproducible run comparing classical and quantum methods on three separate questions: estimating an expectation, selecting a portfolio, and what that selection did in a historical backtest.</p>
+    </div>
+    <button class="ghost" id="theme" type="button" aria-label="Switch between light and dark theme">Theme</button>
+  </div>
+  <div class="meta" id="meta"></div>
+</div></header>
+<nav class="tabs" aria-label="Report sections"><div class="wrap" role="tablist" id="tabs"></div></nav>
+<main><div class="wrap" id="main"></div></main>
+<footer><div class="wrap">Generated by <code>python -m qflab.lab</code>. Every number on this page is read from the run directory named above; nothing is fetched from the network. Simulated quantum circuits are classical computation. No result here is evidence of a quantum advantage or of future investment performance.</div></footer>
+<div class="tip" id="tip" hidden></div>
+<script>const DATA = /*__DATA__*/null;</script>
+<script>
+"use strict";
+const R = DATA.results, OK = DATA.available;
+const NS = "http://www.w3.org/2000/svg";
+const css = (name) => `var(--${name})`;
+
+// ---------------------------------------------------------------- small DOM helpers
+function el(tag, props, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k === "style") node.style.cssText = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) node.append(kid);
+  return node;
+}
+function sv(tag, attrs, parent) {
+  const node = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) node.setAttribute(k, v);
+  if (parent) parent.append(node);
+  return node;
+}
+const fmt = {
+  money: (v, d = 2) => v == null ? "–" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }),
+  pct: (v, d = 1) => v == null ? "–" : (v * 100).toFixed(d).replace("-", "−") + "%",
+  int: (v) => v == null ? "–" : Math.round(v).toLocaleString("en-US"),
+  fix: (v, d = 2) => v == null ? "–" : v.toFixed(d).replace("-", "−"),
+  sig: (v, n = 3) => { if (v == null) return "–"; if (v === 0) return "0";
+    const a = Math.abs(v); const s = (a >= 1e5 || a < 1e-3) ? v.toExponential(n - 1) : String(Number(v.toPrecision(n)));
+    return s.replace("-", "−"); },
+  compact: (v) => { if (v == null) return "–"; const a = Math.abs(v);
+    if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+    if (a >= 1e4) return (v / 1e3).toFixed(0) + "K";
+    return Math.round(v).toLocaleString("en-US"); },
+  secs: (v) => v == null ? "–" : v < 1 ? (v * 1000).toFixed(0) + " ms" : v.toFixed(v < 10 ? 2 : 1) + " s",
+  date: (s) => new Date(s.slice(0, 10) + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }),
+  mon: (s) => new Date(s.slice(0, 10) + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }),
+};
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+const axis = {
+  pct: (v, step) => fmt.pct(v, step && step < 0.0095 ? (step < 0.00095 ? 2 : 1) : 0),
+  money: (v, step) => { const a = Math.abs(v), d = step && step < 1 ? 2 : 0;
+    if (a >= 10000 && (!step || step >= 100)) return (v < 0 ? "−$" : "$") + (a / 1000).toFixed(step && step < 1000 ? 1 : 0) + "K";
+    return fmt.money(v, d); },
+};
+const median = (a) => { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+// ---------------------------------------------------------------- tooltip
+const tip = document.getElementById("tip");
+function showTip(event, title, rows) {
+  tip.replaceChildren();
+  if (title) tip.append(el("div", { class: "t", text: title }));
+  for (const r of rows) {
+    const row = el("div", { class: "r" });
+    if (r.color) row.append(el("span", { class: "key", style: `border-color:${r.color}` }));
+    row.append(el("b", { text: r.value }), el("span", { class: "n", text: r.name }));
+    tip.append(row);
+  }
+  tip.hidden = false;
+  const box = tip.getBoundingClientRect();
+  let x = event.clientX + 14, y = event.clientY + 14;
+  if (x + box.width > innerWidth - 8) x = event.clientX - box.width - 14;
+  if (y + box.height > innerHeight - 8) y = event.clientY - box.height - 14;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+
+// ---------------------------------------------------------------- scales and ticks
+function niceTicks(lo, hi, count = 5) {
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const raw = (hi - lo) / count, mag = 10 ** Math.floor(Math.log10(raw)), norm = raw / mag;
+  const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) out.push(Number(v.toPrecision(12)));
+  return out;
+}
+function logTicks(lo, hi) {
+  const out = [];
+  for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++) out.push(10 ** e);
+  return out;
+}
+const pow10 = (v) => { const e = Math.round(Math.log10(v)); return e >= 0 && e <= 3 ? (10 ** e).toLocaleString("en-US") : e >= 4 && e % 3 === 0 ? `1${e === 6 ? "M" : e === 9 ? "B" : "e" + e}` : e >= 4 ? (10 ** (e % 3)) + (e >= 6 ? "M" : "K") : `1e${e}`.replace("-", "−"); };
+
+// ---------------------------------------------------------------- generic XY chart
+// series: {name, color, type: line|dots|bars|range|tick, data: [{x, y, lo, hi}], faint, label}
+function xy(host, o) {
+  const card = el("div", { class: "card" });
+  host.append(card);
+  card.append(el("h3", { text: o.title }));
+  if (o.sub) card.append(el("p", { class: "sub", text: o.sub }));
+  const named = o.series.filter((s) => s.name && !s.hideLegend);
+  if (named.length > 1 || o.forceLegend) {
+    const legend = el("div", { class: "legend" });
+    for (const s of named) legend.append(el("span", {}, el("i", { class: "key" + (s.type === "bars" ? " box" : s.type === "dots" ? " dot" : ""), style: s.type === "bars" || s.type === "dots" ? `background:${s.color}` : `border-color:${s.color}${s.dash ? ";border-top-style:dashed" : ""}` }), s.name));
+    for (const r of o.rules || []) if (r.legend) legend.append(el("span", {}, el("i", { class: "key", style: `border-color:${css("muted")}` }), r.legend));
+    card.append(legend);
+  }
+  const W = Math.max(300, card.clientWidth - 32), H = o.height || 250;
+  const m = { l: o.left || 52, r: o.right || 18, t: 10, b: o.x.label ? 44 : 28 };
+  const svg = sv("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": o.title + (o.sub ? ". " + o.sub : "") }, null);
+  card.append(svg);
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const all = o.series.flatMap((s) => s.data);
+  // x scale
+  let X, xTicks, bandWidth = 0;
+  const xf = o.x.fmt || ((v) => String(v));
+  if (o.x.kind === "band") {
+    const cats = o.x.cats; bandWidth = pw / cats.length;
+    X = (v) => m.l + (cats.indexOf(v) + 0.5) * bandWidth;
+    xTicks = cats;
+  } else if (o.x.kind === "log") {
+    const xs = all.map((d) => d.x).filter((v) => v > 0);
+    const lo = Math.log10(Math.min(...xs)), hi = Math.log10(Math.max(...xs)), pad = (hi - lo) * 0.04 || 0.5;
+    X = (v) => m.l + (Math.log10(v) - lo + pad) / (hi - lo + 2 * pad) * pw;
+    xTicks = logTicks(10 ** lo, 10 ** hi).filter((t) => X(t) >= m.l - 1 && X(t) <= m.l + pw + 1);
+  } else {
+    const xs = all.map((d) => d.x);
+    const lo = o.x.min ?? Math.min(...xs), hi = o.x.max ?? Math.max(...xs);
+    X = (v) => m.l + (hi === lo ? 0.5 : (v - lo) / (hi - lo)) * pw;
+    xTicks = o.x.ticks || niceTicks(lo, hi, Math.max(3, Math.floor(pw / 90))).filter((t) => t >= lo && t <= hi);
+  }
+  // y scale
+  const ys = all.flatMap((d) => [d.y, d.lo, d.hi]).concat((o.rules || []).map((r) => r.y)).filter((v) => v != null && isFinite(v));
+  let Y, yTicks;
+  const yf = o.y.fmt || ((v) => fmt.sig(v));
+  if (o.y.kind === "log") {
+    const pos = ys.filter((v) => v > 0);
+    const lo = Math.floor(Math.log10(Math.min(...pos)) - 1e-9), hi = Math.ceil(Math.log10(Math.max(...pos)) + 1e-9);
+    Y = (v) => m.t + ph - (Math.log10(Math.max(v, 10 ** lo)) - lo) / (hi - lo || 1) * ph;
+    yTicks = logTicks(10 ** lo, 10 ** hi);
+  } else {
+    let lo = o.y.min ?? Math.min(...ys), hi = o.y.max ?? Math.max(...ys);
+    if (o.y.zero) { lo = Math.min(0, lo); hi = Math.max(0, hi); }
+    yTicks = niceTicks(lo, hi, Math.max(3, Math.floor(ph / 44)));
+    const stride = yTicks.length > 1 ? yTicks[1] - yTicks[0] : 1;
+    if (o.y.min == null && yTicks[0] > lo + stride * 1e-9) yTicks.unshift(Number((yTicks[0] - stride).toPrecision(12)));
+    if (o.y.max == null && yTicks[yTicks.length - 1] < hi - stride * 1e-9) yTicks.push(Number((yTicks[yTicks.length - 1] + stride).toPrecision(12)));
+    if (o.y.min == null) lo = Math.min(lo, yTicks[0]);
+    if (o.y.max == null) hi = Math.max(hi, yTicks[yTicks.length - 1]);
+    yTicks = yTicks.filter((t) => t >= lo - 1e-12 && t <= hi + 1e-12);
+    Y = (v) => m.t + ph - (v - lo) / (hi - lo || 1) * ph;
+  }
+  const yStep = o.y.kind === "log" || yTicks.length < 2 ? null : Math.abs(yTicks[1] - yTicks[0]);
+  // grid and axes
+  for (const t of yTicks) {
+    sv("line", { x1: m.l, x2: m.l + pw, y1: Y(t), y2: Y(t), stroke: css("grid"), "stroke-width": 1 }, svg);
+    sv("text", { x: m.l - 8, y: Y(t) + 4, "text-anchor": "end" }, svg).textContent = o.y.kind === "log" ? (o.y.fmt ? yf(t) : pow10(t)) : yf(t, yStep);
+  }
+  const base = o.y.kind !== "log" && Y(0) <= m.t + ph && Y(0) >= m.t ? Y(0) : m.t + ph;
+  sv("line", { x1: m.l, x2: m.l + pw, y1: base, y2: base, stroke: css("axis"), "stroke-width": 1 }, svg);
+  const every = o.x.kind === "band" ? Math.ceil(xTicks.length / Math.max(1, Math.floor(pw / (o.x.minGap || 56)))) : 1;
+  xTicks.forEach((t, i) => {
+    if (i % every) return;
+    sv("text", { x: X(t), y: m.t + ph + 16, "text-anchor": "middle" }, svg).textContent = o.x.kind === "log" ? (o.x.fmt ? xf(t) : pow10(t)) : xf(t);
+  });
+  if (o.x.label) sv("text", { class: "lab", x: m.l + pw / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = o.x.label;
+  for (const r of o.rules || []) {
+    sv("line", { x1: m.l, x2: m.l + pw, y1: Y(r.y), y2: Y(r.y), stroke: css("muted"), "stroke-width": 1.5 }, svg);
+    if (r.label && !r.legend) sv("text", { class: "direct", x: m.l + pw, y: Y(r.y) - 5, "text-anchor": "end" }, svg).textContent = r.label;
+  }
+  // marks
+  const bars = o.series.filter((s) => s.type === "bars");
+  const barW = bars.length ? Math.min(24, (bandWidth * 0.7) / bars.length - 2) : 0;
+  const offsets = o.series.filter((s) => s.type === "range" || s.type === "bars");
+  for (const s of o.series) {
+    const g = sv("g", {}, svg);
+    if (s.type === "line") {
+      const d = s.data.filter((p) => p.y != null).map((p, i) => `${i ? "L" : "M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join("");
+      sv("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": s.dash ? "butt" : "round", "stroke-dasharray": s.dash || null }, g);
+      if (s.markers) for (const p of s.data) sv("circle", { cx: X(p.x), cy: Y(p.y), r: 4, fill: s.color, stroke: css("surface"), "stroke-width": 2 }, g);
+      if (s.label && s.data.length) { const p = s.data[s.data.length - 1];
+        sv("text", { class: "direct", x: X(p.x) + 8, y: Y(p.y) + 4 }, g).textContent = s.label; }
+    } else if (s.type === "dots") {
+      for (const p of s.data) sv("circle", s.faint
+        ? { cx: X(p.x), cy: Y(p.y), r: 2.5, fill: s.color, opacity: 0.22 }
+        : { cx: X(p.x), cy: Y(p.y), r: 4.5, fill: s.color, stroke: css("surface"), "stroke-width": 2 }, g);
+    } else if (s.type === "bars") {
+      const k = bars.indexOf(s), start = -((bars.length * (barW + 2) - 2) / 2);
+      for (const p of s.data) {
+        const x = X(p.x) + start + k * (barW + 2), y = Y(p.y), h = Math.abs(base - y), r = Math.min(4, h, barW / 2);
+        const up = y <= base;
+        const d = up ? `M${x},${base}V${y + r}Q${x},${y} ${x + r},${y}H${x + barW - r}Q${x + barW},${y} ${x + barW},${y + r}V${base}Z`
+                     : `M${x},${base}V${y - r}Q${x},${y} ${x + r},${y}H${x + barW - r}Q${x + barW},${y} ${x + barW},${y - r}V${base}Z`;
+        sv("path", { d, fill: p.color || s.color }, g);
+        if (p.tag) sv("text", { class: "direct", x: x + barW / 2, y: up ? y - 6 : y + 14, "text-anchor": "middle" }, g).textContent = p.tag;
+      }
+    } else if (s.type === "range") {
+      const k = offsets.indexOf(s), dx = (k - (offsets.length - 1) / 2) * 12;
+      for (const p of s.data) {
+        const x = X(p.x) + dx;
+        sv("line", { x1: x, x2: x, y1: Y(p.lo), y2: Y(p.hi), stroke: s.color, "stroke-width": 2, "stroke-linecap": "round" }, g);
+        sv("circle", { cx: x, cy: Y(p.y), r: 4, fill: s.color, stroke: css("surface"), "stroke-width": 2 }, g);
+      }
+    } else if (s.type === "tick") {
+      for (const p of s.data) sv("line", { x1: X(p.x) - 14, x2: X(p.x) + 14, y1: Y(p.y), y2: Y(p.y), stroke: s.color, "stroke-width": 2, "stroke-linecap": "round" }, g);
+    }
+  }
+  // hover layer
+  const active = o.series.filter((s) => !s.faint);
+  const cross = sv("line", { y1: m.t, y2: m.t + ph, stroke: css("muted"), "stroke-width": 1, visibility: "hidden" }, svg);
+  const ring = sv("circle", { r: 7, fill: "none", stroke: css("ink"), "stroke-width": 1.5, visibility: "hidden" }, svg);
+  const hit = sv("rect", { x: m.l, y: m.t, width: pw, height: ph, fill: "transparent" }, svg);
+  const keys = [...new Set(active.flatMap((s) => s.data.map((d) => d.x)))];
+  const move = (event) => {
+    const box = svg.getBoundingClientRect(), px = (event.clientX - box.left) * (W / box.width), py = (event.clientY - box.top) * (H / box.height);
+    if (o.hover === "point") {
+      let best = null, bd = Infinity;
+      for (const s of active) for (const p of s.data) { const d = (X(p.x) - px) ** 2 + (Y(p.y) - py) ** 2; if (d < bd) { bd = d; best = { s, p }; } }
+      if (!best) return;
+      ring.setAttribute("cx", X(best.p.x)); ring.setAttribute("cy", Y(best.p.y)); ring.setAttribute("visibility", "visible");
+      showTip(event, best.s.name, (o.tip ? o.tip(best.s, best.p) : [{ value: yf(best.p.y), name: xf(best.p.x) }]));
+    } else {
+      let key = keys[0], bd = Infinity;
+      for (const k of keys) { const d = Math.abs(X(k) - px); if (d < bd) { bd = d; key = k; } }
+      cross.setAttribute("x1", X(key)); cross.setAttribute("x2", X(key)); cross.setAttribute("visibility", "visible");
+      const rows = [];
+      for (const s of active) { const p = s.data.find((d) => d.x === key); if (!p || p.y == null) continue;
+        rows.push({ color: s.color, value: (s.fmt || yf)(p.y) + (p.lo != null ? `  [${(s.fmt || yf)(p.lo)}, ${(s.fmt || yf)(p.hi)}]` : ""), name: s.name || "" }); }
+      showTip(event, (o.x.tipFmt || xf)(key), rows.concat(o.tipExtra ? o.tipExtra(key) : []));
+    }
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerleave", () => { hideTip(); cross.setAttribute("visibility", "hidden"); ring.setAttribute("visibility", "hidden"); });
+  // table view
+  if (o.table !== false) {
+    const cols = active.filter((s) => s.name);
+    const table = el("table");
+    table.append(el("tr", {}, el("th", { text: o.x.label || "x" }), cols.flatMap((s) => [el("th", { class: "n", text: s.name })])));
+    for (const key of keys) {
+      const tr = el("tr", {}, el("td", { text: (o.x.tipFmt || xf)(key) }));
+      for (const s of cols) { const p = s.data.find((d) => d.x === key);
+        tr.append(el("td", { class: "n", text: p && p.y != null ? (s.fmt || yf)(p.y) + (p.lo != null ? ` [${(s.fmt || yf)(p.lo)}, ${(s.fmt || yf)(p.hi)}]` : "") : "–" })); }
+      table.append(tr);
+    }
+    card.append(el("details", { class: "data" }, el("summary", { text: "Data table" }), el("div", { class: "scroll", style: "max-height:280px;overflow:auto" }, table)));
+  }
+  if (o.foot) card.append(el("p", { class: "note", text: o.foot }));
+  return card;
+}
+
+// stacked area of portfolio weights; one polygon per fund, separated by a surface-colored gap
+function stacked(host, o) {
+  const card = el("div", { class: "card" });
+  host.append(card);
+  card.append(el("h3", { text: o.title }), el("p", { class: "sub", text: o.sub }));
+  const legend = el("div", { class: "legend" });
+  for (const s of o.series) legend.append(el("span", {}, el("i", { class: "key box", style: `background:${s.color}` }), s.name));
+  card.append(legend);
+  const W = Math.max(300, card.clientWidth - 32), H = 230, m = { l: 44, r: 18, t: 8, b: 28 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const svg = sv("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": o.title }, null);
+  card.append(svg);
+  const n = o.labels.length, X = (i) => m.l + i / (n - 1) * pw, Y = (v) => m.t + ph - v * ph;
+  for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+    sv("line", { x1: m.l, x2: m.l + pw, y1: Y(t), y2: Y(t), stroke: css("grid") }, svg);
+    sv("text", { x: m.l - 8, y: Y(t) + 4, "text-anchor": "end" }, svg).textContent = fmt.pct(t, 0);
+  }
+  const lower = new Array(n).fill(0);
+  for (const s of o.series) {
+    const upper = lower.map((v, i) => v + s.values[i]);
+    let d = "";
+    for (let i = 0; i < n; i++) d += `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(upper[i]).toFixed(1)}`;
+    for (let i = n - 1; i >= 0; i--) d += `L${X(i).toFixed(1)},${Y(lower[i]).toFixed(1)}`;
+    sv("path", { d: d + "Z", fill: s.color, "fill-opacity": 0.82, stroke: css("surface"), "stroke-width": 1.5, "stroke-linejoin": "round" }, svg);
+    for (let i = 0; i < n; i++) lower[i] = upper[i];
+  }
+  let last = "";
+  o.labels.forEach((lab, i) => { const mon = lab.slice(0, 7); if (mon !== last && (i === 0 || Number(lab.slice(5, 7)) % 2 === 1)) {
+    sv("text", { x: X(i), y: m.t + ph + 16, "text-anchor": i === 0 ? "start" : "middle" }, svg).textContent = fmt.mon(lab).split(" ")[0]; } last = mon; });
+  const cross = sv("line", { y1: m.t, y2: m.t + ph, stroke: css("ink"), "stroke-width": 1, visibility: "hidden" }, svg);
+  const hit = sv("rect", { x: m.l, y: m.t, width: pw, height: ph, fill: "transparent" }, svg);
+  hit.addEventListener("pointermove", (event) => {
+    const box = svg.getBoundingClientRect(), px = (event.clientX - box.left) * (W / box.width);
+    const i = Math.max(0, Math.min(n - 1, Math.round((px - m.l) / pw * (n - 1))));
+    cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+    showTip(event, fmt.date(o.labels[i]), o.series.filter((s) => s.values[i] > 0.0005).map((s) => ({ color: s.color, value: fmt.pct(s.values[i]), name: s.name })));
+  });
+  hit.addEventListener("pointerleave", () => { hideTip(); cross.setAttribute("visibility", "hidden"); });
+  return card;
+}
+
+function table(columns, rows, opts = {}) {
+  const t = el("table", { class: opts.nowrap ? "nowrap" : null });
+  t.append(el("tr", {}, columns.map((c) => el("th", { class: c.n ? "n" : null, text: c.h, title: c.title }))));
+  for (const r of rows) t.append(el("tr", {}, columns.map((c) => { const v = c.v(r); return el("td", { class: c.n ? "n" : null }, v instanceof Node ? v : document.createTextNode(v ?? "–")); })));
+  return el("div", { class: "scroll" + (opts.cls ? " " + opts.cls : "") }, t);
+}
+function tile(label, value, foot) {
+  return el("div", { class: "card tile" }, el("div", { class: "label", text: label }), el("div", { class: "value", text: value }), el("div", { class: "foot", text: foot }));
+}
+function card(title, sub, ...kids) {
+  return el("div", { class: "card" }, el("h3", { text: title }), sub ? el("p", { class: "sub", text: sub }) : null, ...kids);
+}
+const ICONS = {
+  pass: ["good", "M3.5 8.5l3 3 6-7"], fail: ["critical", "M4 4l8 8M12 4l-8 8"],
+  tests: ["s1", "M3.5 8.5l3 3 6-7"], open: ["warning", "M8 3.5v6M8 12v.5"], missing: ["muted", "M4 8h8"],
+};
+const STATUS_TEXT = { pass: "Checked in this run", fail: "Failed", tests: "Enforced by tests", open: "Not yet satisfied", missing: "Not run" };
+function statusMark(status) {
+  const [color, d] = ICONS[status] || ICONS.missing;
+  const s = sv("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" });
+  sv("circle", { cx: 8, cy: 8, r: 7.25, fill: "none", stroke: css(color), "stroke-width": 1.5 }, s);
+  sv("path", { d, fill: "none", stroke: css(color), "stroke-width": 1.75, "stroke-linecap": "round", "stroke-linejoin": "round" }, s);
+  return el("span", { class: "status" }, s, STATUS_TEXT[status] || status);
+}
+function unavailable(name) {
+  const info = R[name];
+  return el("p", { class: "empty", text: info && info.error ? `This section failed in this run: ${info.error}` : "This section was not run. Run it with: python -m qflab.lab run configs/lab.json" });
+}
+
+// ---------------------------------------------------------------- entity colors (fixed)
+const METHOD = { monte_carlo: ["Monte Carlo", css("s1")], iqae: ["IQAE (CUDA-Q)", css("s2")], sobol_qmc: ["Sobol QMC", css("s3")] };
+const SOLVER = { exact: ["Exact enumeration", css("s1")], qaoa: ["QAOA (CUDA-Q)", css("s2")], benchmark: ["Equal-weight monthly", css("neutral")] };
+const FUNDS = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+
+// ================================================================ Overview
+function overview(root) {
+  const tiles = el("div", { class: "grid g4" });
+  root.append(el("h2", { text: "What this run found" }), tiles);
+  if (OK.risk_lab) {
+    const ref = R.risk_lab.reference, q = R.risk_lab.benchmark.filter((b) => b.method === "iqae");
+    const best = q[q.length - 1];
+    tiles.append(tile("Call price, exact on the loaded grid", fmt.money(ref.exact_discrete, 4), `Black–Scholes ${fmt.money(ref.analytical_continuous, 4)}; the grid itself is off by ${fmt.money(ref.model_error, 3)}`));
+    tiles.append(tile("IQAE median error at its tightest budget", fmt.money(best.median_abs_error, 4), `${fmt.compact(best.median_work)} state-preparation calls; ${fmt.pct(best.coverage, 0)} of intervals covered the target`));
+  }
+  if (OK.portfolio) {
+    const p = R.portfolio, e = p.runs.exact.metrics, qa = p.runs.qaoa.metrics;
+    tiles.append(tile("Ending equity, exact vs QAOA", `${fmt.money(e.ending_equity, 0)} / ${fmt.money(qa.ending_equity, 0)}`, `${p.pairing.identical_selections} of ${p.pairing.decisions} monthly selections identical; benchmark ${fmt.money(p.runs.benchmark.metrics.ending_equity, 0)}`));
+  }
+  if (OK.qaoa_study) {
+    const s = R.qaoa_study, top = [...s.summary].filter((r) => r.optimal_probability != null).sort((a, b) => b.optimal_probability - a.optimal_probability)[0];
+    tiles.append(tile("Best QAOA chance of the optimum per shot", fmt.pct(top.optimal_probability, 1), `depth ${top.layers}, penalty scale ${top.penalty_scale}; a random bitstring has ${fmt.pct(s.baselines.uniform_sampling.optimal_probability, 2)}`));
+  }
+  const findings = el("ul", { class: "plain" });
+  if (OK.risk_lab) {
+    const b = R.risk_lab.benchmark, ref = R.risk_lab.reference;
+    const q = b.filter((r) => r.method === "iqae"), mc = b.filter((r) => r.method === "monte_carlo"), qm = b.filter((r) => r.method === "sobol_qmc");
+    const qb = q[q.length - 1], mcMatch = mc.reduce((a, r) => Math.abs(Math.log(r.median_work / qb.median_work)) < Math.abs(Math.log(a.median_work / qb.median_work)) ? r : a);
+    findings.append(el("li", { text: `Expectation estimation: with about ${fmt.compact(qb.median_work)} queries IQAE's median error was ${fmt.money(qb.median_abs_error, 4)}; Monte Carlo with ${fmt.compact(mcMatch.median_work)} samples had ${fmt.money(mcMatch.median_abs_error, 4)}. IQAE's deepest circuit at that budget had ${fmt.int(qb.deepest_circuit.gates)} gates, which only an ideal simulator can run.` }));
+    const qmb = qm[qm.length - 1];
+    findings.append(el("li", { text: `A stronger classical method wins here: scrambled Sobol reached a median error of ${fmt.money(qmb.median_abs_error, 4)} with ${fmt.compact(qmb.median_work)} samples, against the continuous model directly. This one-dimensional payoff also has a closed form, so it is a verification problem, not a use case.` }));
+    findings.append(el("li", { text: `Model error is separate from estimator error: the ${ref.problem.scenarios}-point grid is ${fmt.money(Math.abs(ref.model_error), 3)} away from Black–Scholes, more than IQAE's own error at tight budgets. A better estimator does not fix a coarse grid.` }));
+  }
+  if (OK.qaoa_study) {
+    const s = R.qaoa_study, u = s.baselines.uniform_sampling, sw = s.baselines.swap_search;
+    const med = median(s.summary.filter((r) => r.median_total_shots).map((r) => r.median_total_shots));
+    findings.append(el("li", { text: `Portfolio search: the problem has ${s.decisions[0].feasible_portfolios} feasible portfolios, so enumeration is exact in ${s.baselines.exact_enumeration.evaluations} evaluations and a swap search found the optimum in ${fmt.pct(sw.found_optimum_rate, 0)} of runs using about ${fmt.fix(sw.mean_evaluations, 0)}. A QAOA solve spent about ${fmt.compact(med)} circuit shots. At this size the instance tests correctness and integration; it cannot show a speed advantage.` }));
+    findings.append(el("li", { text: `QAOA does concentrate probability on good answers (up to ${fmt.fix(Math.max(...s.summary.map((r) => r.advantage_over_uniform || 0)), 0)} times a uniform draw), but picking the best of ${fmt.int(s.settings.final_shots)} random bitstrings would also find the optimum ${fmt.pct(u.found_optimum_rate_at_final_shots, 2)} of the time.` }));
+  }
+  if (OK.portfolio) {
+    const p = R.portfolio.pairing;
+    findings.append(el("li", { text: `Historical study: the paired backtests differ only in ${p.config_differences.join(", ")}. QAOA matched the exact selection in ${p.identical_selections} of ${p.decisions} decisions, and the ending equity difference was ${fmt.money(p.ending_equity_difference, 2)}. One retrospective year is descriptive, not evidence about future returns.` }));
+  }
+  if (OK.risk_forecast) {
+    const s = R.risk_forecast.summary;
+    findings.append(el("li", { text: `Risk forecasts: IQAE's interval contained the exact discrete probability in ${s.iqae_covers_discrete} of ${s.decisions} decisions. The forecasts are diagnostic and changed no trade; ${s.realized_loss_events} of ${s.scored_decisions} scored windows actually lost more than the threshold.` }));
+  }
+  root.append(card("Reading the results", "Three questions are answered separately. A better objective value does not establish better returns, and fewer queries do not establish faster execution.", findings));
+
+  root.append(el("h2", { text: "Evidence labels" }));
+  root.append(el("p", { class: "lede", text: "Every quantum number on this page carries one of these labels. This run contains only the first two." }));
+  const labels = [
+    ["Ideal query complexity", "A count of oracle or state-preparation calls under stated access assumptions. It is not a runtime.", true],
+    ["Simulator performance", "A classical CPU executing a quantum circuit with CUDA-Q. Wall times here are simulation times.", true],
+    ["Hardware observation", "Measured on a physical device, with noise and queue time. Not present in this run.", false],
+    ["Hardware projection", "A resource estimate under supplied device assumptions. Not present in this run.", false],
+  ];
+  root.append(el("div", { class: "grid g4" }, labels.map(([name, text, here]) => el("div", { class: "card" }, el("h3", { text: name }), el("p", { class: "sub", text }), el("span", { class: "chip" }, el("i", { style: `background:${here ? css("s1") : css("axis")}` }), here ? "used in this run" : "not in this run")))));
+
+  root.append(el("h2", { text: "Scientific checks" }));
+  root.append(el("p", { class: "lede", text: "The plan's minimum checks before interpreting results. Each line says where the evidence comes from." }));
+  root.append(el("div", { class: "card" }, table([
+    { h: "Check", v: (r) => r.name }, { h: "Status", v: (r) => statusMark(r.status) }, { h: "Evidence", v: (r) => r.detail },
+  ], DATA.checks)));
+}
+
+// ================================================================ Risk lab
+function riskLab(root) {
+  if (!OK.risk_lab) return root.append(unavailable("risk_lab"));
+  const L = R.risk_lab, ref = L.reference, P = ref.problem.parameters;
+  root.append(el("h2", { text: "Pricing one European call" }));
+  root.append(el("p", { class: "lede", text: `Spot ${P.spot}, strike ${P.strike}, rate ${fmt.pct(P.rate, 0)}, volatility ${fmt.pct(P.volatility, 0)}, maturity ${P.maturity} year. The terminal price is cut at ±${ref.problem.truncation_std} standard deviations and placed on ${ref.problem.scenarios} grid points (${ref.problem.scenario_qubits} qubits), plus one payoff qubit.` }));
+  root.append(el("div", { class: "grid g3" },
+    tile("Analytical, continuous model", fmt.money(ref.analytical_continuous, 4), "Black–Scholes; the right answer for the original model"),
+    tile("Exact sum on the loaded grid", fmt.money(ref.exact_discrete, 4), "what Monte Carlo and IQAE are actually estimating"),
+    tile("Model error of the grid", fmt.money(ref.model_error, 4), `discretization plus ${fmt.pct(ref.problem.truncated_tail_mass, 2)} dropped tail mass; no estimator can remove it`)));
+
+  const g1 = el("div", { class: "grid g2" }); root.append(g1);
+  const idx = ref.grid.map((_, i) => i);
+  xy(g1, { title: "Probability loaded into the circuit", sub: "Exact mass of each price bin, renormalized after truncation.", height: 200, table: false,
+    x: { kind: "band", cats: idx, fmt: (i) => "$" + ref.grid[i].toFixed(0), minGap: 48, label: "Terminal price (bin midpoint)" }, y: { zero: true, fmt: axis.pct },
+    series: [{ name: "Probability", color: css("s1"), type: "bars", data: idx.map((i) => ({ x: i, y: ref.probabilities[i] })) }] });
+  xy(g1, { title: "Payoff loaded onto the indicator qubit", sub: `max(price − strike, 0), scaled into [0, 1] by ${fmt.money(ref.payoff_scale)}.`, height: 200, table: false,
+    x: { kind: "band", cats: idx, fmt: (i) => "$" + ref.grid[i].toFixed(0), minGap: 48, label: "Terminal price (bin midpoint)" }, y: { zero: true, max: 1, fmt: (v) => fmt.fix(v, 1) },
+    series: [{ name: "Scaled payoff", color: css("s2"), type: "bars", data: idx.map((i) => ({ x: i, y: ref.scaled_payoff[i] })) }] });
+
+  root.append(card("The circuit encodes the right number", "Privileged simulator check: the probability of reading 1 on the indicator qubit after k Grover steps, against sin²((2k+1)θ) computed from the exact discrete sum.",
+    table([{ h: "Grover steps k", n: 1, v: (r) => String(r.grover_power) }, { h: "Circuit probability", n: 1, v: (r) => r.circuit_probability.toFixed(12) },
+      { h: "Predicted", n: 1, v: (r) => r.predicted_probability.toFixed(12) }, { h: "Agreement", v: (r) => statusMark(r.matches ? "pass" : "fail") }], L.circuit_verification)));
+
+  root.append(el("h2", { text: "Error against work" }));
+  root.append(el("p", { class: "lede", text: `${L.benchmark[0].seeds} independent seeds per budget. Work is one payoff evaluation for the classical methods and one application of the state preparation (or its inverse) for IQAE. Faint dots are single runs; lines join medians.` }));
+  const g2 = el("div", { class: "grid g2" }); root.append(g2);
+  const methods = ["monte_carlo", "iqae", "sobol_qmc"];
+  const scatter = (field, title, sub) => {
+    const series = [];
+    for (const mth of methods) {
+      const rows = L.benchmark.filter((b) => b.method === mth);
+      series.push({ color: METHOD[mth][1], type: "dots", faint: true, data: rows.flatMap((b) => b.points.filter((p) => p[field] > 0).map((p) => ({ x: p.work, y: p[field] }))) });
+    }
+    for (const mth of methods) {
+      const rows = L.benchmark.filter((b) => b.method === mth);
+      series.push({ name: METHOD[mth][0] + (mth === "sobol_qmc" ? " (continuous target)" : ""), color: METHOD[mth][1], type: "line", markers: true,
+        data: rows.map((b) => ({ x: b.median_work, y: field === "abs_error" ? b.median_abs_error : b.mean_half_width, row: b })) });
+    }
+    xy(g2, { title, sub, height: 300, hover: "point", table: false, x: { kind: "log", label: "Work (queries or samples)" }, y: { kind: "log", fmt: (v) => "$" + fmt.sig(v, 1) }, series,
+      tip: (s, p) => [{ value: fmt.money(p.y, 4), name: field === "abs_error" ? "median absolute error" : "mean interval half-width" }, { value: fmt.int(p.x), name: "median work" }, { value: fmt.pct(p.row.coverage, 0), name: "interval coverage" }, { value: p.row.budget_label, name: "budget" }] });
+  };
+  scatter("abs_error", "Absolute error", "Distance from each method's own target, in dollars. Lower and further left is better.");
+  scatter("half_width", "Interval half-width", `Width of the reported ${fmt.pct(L.settings.confidence, 0)} interval. Monte Carlo falls as 1/√work; IQAE falls roughly as 1/work.`);
+
+  root.append(card("Benchmark table", "Counting convention: " + L.counting_convention + ".", table([
+    { h: "Method", v: (r) => METHOD[r.method][0] }, { h: "Target", v: (r) => r.target }, { h: "Budget", v: (r) => r.budget_label },
+    { h: "Coverage", n: 1, v: (r) => fmt.pct(r.coverage, 0) }, { h: "Median error", n: 1, v: (r) => fmt.money(r.median_abs_error, 4) },
+    { h: "Half-width", n: 1, v: (r) => fmt.money(r.mean_half_width, 4) }, { h: "Median work", n: 1, v: (r) => fmt.int(r.median_work) },
+    { h: "Time", n: 1, v: (r) => fmt.secs(r.median_elapsed_seconds) }, { h: "Max k", n: 1, v: (r) => r.max_grover_power ?? "–" },
+    { h: "Deepest circuit: gates", n: 1, v: (r) => r.deepest_circuit ? fmt.int(r.deepest_circuit.gates) : "–" }, { h: "Depth", n: 1, v: (r) => r.deepest_circuit ? fmt.int(r.deepest_circuit.depth) : "–" },
+  ], L.benchmark, { nowrap: true }), el("p", { class: "note", text: "Coverage is the share of seeds whose interval contained the method's target. Times are wall-clock on this machine; for IQAE that is classical simulation time, not device time." })));
+
+  const tight = L.benchmark.filter((b) => b.method === "iqae").slice(-1)[0];
+  if (tight && tight.example_rounds) {
+    const rounds = tight.example_rounds.map((r, i) => ({ ...r, i: i + 1 }));
+    xy(root.appendChild(el("div", { class: "grid" })), { title: "How one IQAE run narrows its interval", sub: `One seed at ${tight.budget_label}. Each round runs ${rounds[0].shots} shots of a circuit with k Grover steps. A larger k resolves the amplitude more finely, and needs a proportionally deeper circuit. The exact amplitude is ${fmt.fix(ref.exact_amplitude, 5)}.`, height: 230,
+      x: { kind: "band", cats: rounds.map((r) => r.i), fmt: (i) => `k = ${rounds[i - 1].k}`, tipFmt: (i) => `Round ${i}: k = ${rounds[i - 1].k}, interval [${fmt.fix(rounds[i - 1].a_low, 5)}, ${fmt.fix(rounds[i - 1].a_high, 5)}]`, label: "Round (Grover steps k in that round's circuit)", minGap: 52 },
+      y: { kind: "log", fmt: (v) => fmt.sig(v, 1) },
+      series: [{ name: "Half-width of the confidence interval for the amplitude", color: css("s2"), type: "line", markers: true, fmt: (v) => fmt.sig(v, 3), data: rounds.map((r) => ({ x: r.i, y: (r.a_high - r.a_low) / 2 })) }] });
+  }
+
+  root.append(el("h2", { text: "Grid size: accuracy of the model against cost of loading it" }));
+  root.append(el("p", { class: "lede", text: `IQAE at epsilon = ${L.sweep_epsilon} on grids of increasing size. Loading a dense table needs about two rotations per scenario, so the state preparation costs more gates than the classical exact sum has terms.` }));
+  const g3 = el("div", { class: "grid g3" }); root.append(g3);
+  const G = L.grid_sweep, qcats = G.map((g) => g.scenario_qubits);
+  const qx = { kind: "band", cats: qcats, fmt: (v) => String(v), tipFmt: (v) => `${v} scenario qubits (${2 ** v} points)`, label: "Scenario qubits" };
+  xy(g3, { title: "Error sources", sub: "Dollars, log scale.", height: 240, x: qx, y: { kind: "log", fmt: (v) => "$" + fmt.sig(v, 1) },
+    series: [{ name: "Grid model error", color: css("s4"), type: "line", markers: true, fmt: (v) => fmt.money(v, 4), data: G.map((g) => ({ x: g.scenario_qubits, y: Math.abs(g.model_error) })) },
+      { name: "IQAE median error", color: css("s2"), type: "line", markers: true, fmt: (v) => fmt.money(v, 4), data: G.map((g) => ({ x: g.scenario_qubits, y: g.iqae.median_abs_error })) }] });
+  xy(g3, { title: "Cost to load versus cost to sum", sub: "Gates in one state preparation, against terms in the exact classical sum.", height: 240, x: qx, y: { kind: "log" },
+    series: [{ name: "State-preparation gates", color: css("s2"), type: "line", markers: true, fmt: fmt.int, data: G.map((g) => ({ x: g.scenario_qubits, y: g.state_preparation.rotations + g.state_preparation.cnots })) },
+      { name: "Exact-sum terms", color: css("s1"), type: "line", markers: true, fmt: fmt.int, data: G.map((g) => ({ x: g.scenario_qubits, y: g.exact_sum_terms })) }] });
+  xy(g3, { title: "Deepest circuit executed", sub: "Total gates in the largest Grover power any seed reached.", height: 240, x: qx, y: { kind: "log" },
+    series: [{ name: "Gates", color: css("s2"), type: "bars", fmt: fmt.int, data: G.map((g) => ({ x: g.scenario_qubits, y: g.deepest_circuit.gates })) }] });
+  root.append(card("Grid sweep table", null, table([
+    { h: "Scenario qubits", n: 1, v: (g) => String(g.scenario_qubits) }, { h: "Total qubits", n: 1, v: (g) => String(g.state_preparation.qubits) },
+    { h: "Exact discrete", n: 1, v: (g) => fmt.money(g.exact_discrete, 4) }, { h: "Model error", n: 1, v: (g) => fmt.money(g.model_error, 4) },
+    { h: "Prep. rotations", n: 1, v: (g) => fmt.int(g.state_preparation.rotations) }, { h: "Prep. CNOTs", n: 1, v: (g) => fmt.int(g.state_preparation.cnots) }, { h: "Prep. depth", n: 1, v: (g) => fmt.int(g.state_preparation.depth) },
+    { h: "IQAE error", n: 1, v: (g) => fmt.money(g.iqae.median_abs_error, 4) }, { h: "Coverage", n: 1, v: (g) => fmt.pct(g.iqae.coverage, 0) }, { h: "Work", n: 1, v: (g) => fmt.int(g.iqae.median_work) },
+    { h: "Deepest: gates", n: 1, v: (g) => fmt.int(g.deepest_circuit.gates) }, { h: "Depth", n: 1, v: (g) => fmt.int(g.deepest_circuit.depth) }, { h: "Sim. time", n: 1, v: (g) => fmt.secs(g.iqae.median_elapsed_seconds) },
+  ], G, { nowrap: true }), el("p", { class: "note", text: "Gate counts are logical gates with all-to-all connectivity; the multi-controlled Z in each Grover step is counted as one gate and not decomposed. Model error settles at the truncation floor once the bins are fine enough." })));
+
+  const g4 = el("div", { class: "grid g2" }); root.append(g4);
+  g4.append(card("Other strikes, at matched work", "Monte Carlo is given the same number of samples as IQAE's median work.", table([
+    { h: "Strike", n: 1, v: (s) => fmt.money(s.strike, 0) }, { h: "Black–Scholes", n: 1, v: (s) => fmt.money(s.analytical_continuous, 4) }, { h: "Exact discrete", n: 1, v: (s) => fmt.money(s.exact_discrete, 4) },
+    { h: "Work", n: 1, v: (s) => fmt.int(s.matched_work) }, { h: "IQAE error", n: 1, v: (s) => fmt.money(s.iqae.median_abs_error, 4) }, { h: "MC error", n: 1, v: (s) => fmt.money(s.monte_carlo.median_abs_error, 4) },
+    { h: "IQAE cov.", n: 1, v: (s) => fmt.pct(s.iqae.coverage, 0) }, { h: "MC cov.", n: 1, v: (s) => fmt.pct(s.monte_carlo.coverage, 0) }], L.strike_sweep)));
+  const N = L.noise_study;
+  g4.append(card("Noise study", `A separate ${N[0].scenario_qubits + 1}-qubit circuit on the density-matrix simulator. IQAE assumes an ideal circuit, so its intervals stay narrow while the answer drifts.`, table([
+    { h: "Two-qubit error rate", n: 1, v: (n) => fmt.pct(n.two_qubit_depolarizing, 2) }, { h: "Coverage", n: 1, v: (n) => fmt.pct(n.coverage, 0) },
+    { h: "", v: (n) => el("div", { class: "bar", role: "img", "aria-label": `coverage ${fmt.pct(n.coverage, 0)}` }, el("i", { style: `width:${n.coverage * 100}%;background:${css("s2")}` })) },
+    { h: "Median error", n: 1, v: (n) => fmt.money(n.median_abs_error, 4) }, { h: "Half-width", n: 1, v: (n) => fmt.money(n.mean_half_width, 4) }, { h: "Max k", n: 1, v: (n) => String(n.max_grover_power) }], N),
+    el("p", { class: "note", text: cap(L.noise_model_note) + "." })));
+}
+
+// ================================================================ Portfolio
+let solverView = "exact";
+function portfolio(root) {
+  if (!OK.portfolio) return root.append(unavailable("portfolio"));
+  const P = R.portfolio, runs = P.runs, keys = ["exact", "qaoa", "benchmark"];
+  root.append(el("h2", { text: "Historical backtest: same data, same costs, different search" }));
+  root.append(el("p", { class: "lede", text: `Eight ETFs, three chosen at each month-end from a trailing window, traded at the next session's close by the NautilusTrader engine with ${runs.exact.fee_bps} bps fees. ${fmt.date(runs.exact.dates[0])} to ${fmt.date(runs.exact.dates[runs.exact.dates.length - 1])}.` }));
+  root.append(el("div", { class: "grid g4" },
+    ...keys.map((k) => tile(SOLVER[k][0], fmt.money(runs[k].metrics.ending_equity, 0), `${fmt.pct(runs[k].metrics.total_return)} total; max drawdown ${fmt.pct(runs[k].metrics.max_drawdown)}`)),
+    tile("Selections QAOA and exact share", `${P.pairing.identical_selections} / ${P.pairing.decisions}`, P.pairing.first_divergence ? `first difference at ${fmt.date(P.pairing.first_divergence)}` : "no decision differed")));
+  const n = runs.exact.dates.length, ix = runs.exact.dates.map((_, i) => i);
+  const months = []; let last = "";
+  runs.exact.dates.forEach((d, i) => { if (d.slice(0, 7) !== last) { months.push(i); last = d.slice(0, 7); } });
+  const tx = { kind: "linear", min: 0, max: n - 1, ticks: months.filter((_, j) => j % 2 === 0), fmt: (i) => fmt.mon(runs.exact.dates[i]).split(" ")[0], tipFmt: (i) => fmt.date(runs.exact.dates[i]) };
+  const g = el("div", { class: "grid" }); root.append(g);
+  xy(g, { title: "Account equity", sub: "Cash plus units at each session's close, after fees. QAOA is drawn dashed over the exact line; where only one path is visible, the two solvers held the same positions.", height: 300, right: 24, x: tx, y: { fmt: axis.money },
+    series: ["benchmark", "exact", "qaoa"].map((k) => ({ name: SOLVER[k][0], color: SOLVER[k][1], type: "line", dash: k === "qaoa" ? "5 5" : null, fmt: (v) => fmt.money(v), data: ix.map((i) => ({ x: i, y: runs[k].equity[i] })) })) });
+  const g2 = el("div", { class: "grid g2" }); root.append(g2);
+  const dd = (eq) => { let peak = -Infinity; return eq.map((v) => { peak = Math.max(peak, v); return v / peak - 1; }); };
+  xy(g2, { title: "Drawdown", sub: "Decline from each run's own running peak.", height: 220, x: tx, y: { fmt: axis.pct, max: 0 },
+    series: ["benchmark", "exact", "qaoa"].map((k) => { const d = dd(runs[k].equity); return { name: SOLVER[k][0], color: SOLVER[k][1], type: "line", dash: k === "qaoa" ? "5 5" : null, fmt: (v) => fmt.pct(v, 2), data: ix.map((i) => ({ x: i, y: d[i] })) }; }) });
+  const diff = ix.map((i) => runs.qaoa.equity[i] - runs.exact.equity[i]);
+  if (diff.every((v) => Math.abs(v) < 0.005)) g2.append(card("QAOA minus exact equity", "Difference between the two optimized runs, session by session.",
+    el("div", { class: "tile" }, el("div", { class: "value", text: "$0.00 on all " + n + " sessions" }), el("div", { class: "foot", text: "QAOA returned the enumerated optimum at every decision, so both runs submitted the same orders and their ledgers are identical. The difference between them is the cost of the search, shown under QAOA search." }))));
+  else xy(g2, { title: "QAOA minus exact equity", sub: "Zero while both solvers hold the same positions.", height: 220, x: tx, y: { fmt: axis.money, zero: true },
+    series: [{ name: "Difference", color: css("s2"), type: "line", fmt: (v) => fmt.money(v), data: diff.map((v, i) => ({ x: i, y: v })) }] });
+
+  const M = [["Ending equity", (m) => fmt.money(m.ending_equity)], ["Total return", (m) => fmt.pct(m.total_return, 2)], ["CAGR", (m) => fmt.pct(m.cagr, 2)], ["Volatility (annualized)", (m) => fmt.pct(m.volatility, 2)],
+    ["Sharpe", (m) => fmt.fix(m.sharpe)], ["Sortino", (m) => fmt.fix(m.sortino)], ["Maximum drawdown", (m) => fmt.pct(m.max_drawdown, 2)], ["Turnover", (m) => fmt.fix(m.turnover) + "×"],
+    ["Fees paid", (m) => fmt.money(m.fees)], ["Ending equity before fees", (m) => fmt.money(m.ending_equity_gross_of_fees)], ["Fills", (m) => String(m.fill_count)]];
+  const conv = runs.exact.metrics.conventions;
+  root.append(card("Financial report", "Computed from each run's saved equity and fills. Net of fees unless stated.", table(
+    [{ h: "Metric", v: (r) => r[0] }, ...keys.map((k) => ({ h: SOLVER[k][0], n: 1, v: (r) => r[1](runs[k].metrics) }))], M),
+    el("p", { class: "note", text: `Conventions: ${conv.annualization}; risk-free rate ${conv.risk_free_rate}; turnover is ${conv.turnover}; "before fees" is ${conv.gross_of_fees}. ${cap(P.interpretation)}.` })));
+
+  root.append(el("h2", { text: "Holdings and decisions" }));
+  const controls = el("div", { class: "controls" }, el("label", { text: "Show the run driven by" }));
+  const seg = el("div", { class: "seg", role: "group", "aria-label": "Solver" });
+  for (const k of ["exact", "qaoa"]) seg.append(el("button", { type: "button", "aria-pressed": String(solverView === k), text: SOLVER[k][0], onclick: () => { solverView = k; render("portfolio"); } }));
+  controls.append(seg); root.append(controls);
+  const cur = runs[solverView], other = runs[solverView === "exact" ? "qaoa" : "exact"];
+  const D = cur.decisions, syms = cur.symbols;
+  const mat = el("div", { class: "matrix", style: `grid-template-columns: max-content repeat(${D.length}, minmax(44px, 1fr)); --fill:${SOLVER[solverView][1]}`, role: "table", "aria-label": "Selected funds by decision" });
+  mat.append(el("div"));
+  for (const d of D) mat.append(el("div", { class: "head", text: fmt.mon(d.data_cutoff) }));
+  for (const s of syms) {
+    mat.append(el("div", { class: "rowname", text: s }));
+    D.forEach((d, i) => {
+      const on = d.selected.includes(s), oth = other.decisions[i] && other.decisions[i].selected.includes(s);
+      mat.append(el("div", { class: "cell" + (on ? " on" : "") + (on !== oth ? " other" : ""), title: `${s}, ${fmt.date(d.data_cutoff)}: ${on ? "selected" : "not selected"}${on !== oth ? `; ${SOLVER[solverView === "exact" ? "qaoa" : "exact"][0]} chose differently` : ""}` }));
+    });
+  }
+  root.append(card(`Funds selected at each decision: ${SOLVER[solverView][0]}`, "One column per month-end decision. A ring marks a cell where the other solver's run chose differently.", mat,
+    el("p", { class: "note", text: cap(P.pairing.note) + "." })));
+  const g3 = el("div", { class: "grid" }); root.append(g3);
+  const invested = ix.map((i) => syms.reduce((a, s) => a + cur.weights[s][i], 0));
+  stacked(g3, { title: `Daily portfolio weights: ${SOLVER[solverView][0]}`, sub: "Market value of each fund as a share of equity. Whole-unit rounding and price drift move actual weights away from the 30% targets.", labels: cur.dates,
+    series: syms.map((s, i) => ({ name: s, color: css(FUNDS[i]), values: cur.weights[s] })).concat([{ name: "Cash", color: css("axis"), values: invested.map((v) => Math.max(0, 1 - v)) }]) });
+  const quantum = solverView === "qaoa";
+  root.append(card("Decision log", "Solver wall time is measured separately from the simulated clock; each answer becomes usable after the configured simulated delay.", table([
+    { h: "Data cutoff", v: (d) => fmt.date(d.data_cutoff) }, { h: "Selected", v: (d) => d.selected.join(", ") || "–" }, { h: "Status", v: (d) => d.status === "feasible" ? "accepted" : d.status + (d.fallback_reason ? `: ${d.fallback_reason}` : "") },
+    { h: "Delivery", v: (d) => d.delivery_status.replace(/_/g, " ").replace(/(\d{4}-\d\d-\d\d)T.*/, "$1") }, { h: "Solver time", n: 1, v: (d) => fmt.secs(d.elapsed_wall_seconds) },
+    ...(quantum ? [{ h: "Gap to optimum", n: 1, title: "Financial objective of the chosen portfolio minus the enumerated optimum for the same inputs", v: (d) => d.objective_gap == null ? "–" : fmt.sig(d.objective_gap, 2) },
+      { h: "P(feasible)", n: 1, v: (d) => fmt.pct(d.feasible_probability, 0) }, { h: "P(optimal)", n: 1, v: (d) => fmt.pct(d.optimal_probability, 1) }, { h: "Shots", n: 1, v: (d) => fmt.int(d.total_shots) },
+      { h: "Answer key", v: (d) => d.exact_selected ? d.exact_selected.join(", ") : "–" }]
+      : [{ h: "Portfolios scored", n: 1, v: (d) => fmt.int(d.evaluated_portfolios) }]),
+  ], D, { nowrap: true }), quantum ? el("p", { class: "note", text: "Probabilities are frequencies in the final sample. The answer key is exhaustive enumeration on the same request; it is reported, never used to choose." }) : null));
+
+  const g4 = el("div", { class: "grid g2" }); root.append(g4);
+  g4.append(card("Transaction-cost sensitivity", "The exact-solver backtest rerun at other fee levels. Fees change cash, so later decisions can change too.", table([
+    { h: "Fee", n: 1, v: (s) => s.fee_bps + " bps" }, { h: "Ending equity", n: 1, v: (s) => fmt.money(s.ending_equity) }, { h: "Total return", n: 1, v: (s) => fmt.pct(s.total_return, 2) },
+    { h: "Fees paid", n: 1, v: (s) => fmt.money(s.fees) }, { h: "Turnover", n: 1, v: (s) => fmt.fix(s.turnover) + "×" }], P.fee_sensitivity)));
+  g4.append(card("Is this a fair pair?", "The two optimized runs must differ only in how the selection is searched.", el("dl", { class: "kv" },
+    el("dt", { text: "Config fields that differ" }), el("dd", { text: P.pairing.config_differences.join(", ") }),
+    el("dt", { text: "Differs in method only" }), el("dd", {}, statusMark(P.pairing.differs_only_in_method ? "pass" : "fail")),
+    el("dt", { text: "Same frozen data snapshot" }), el("dd", {}, statusMark(P.pairing.same_snapshot ? "pass" : "fail")),
+    el("dt", { text: "QAOA equals the optimum for its own inputs" }), el("dd", { text: `${P.pairing.qaoa_matched_own_inputs} of ${runs.qaoa.decisions.length} decisions` }),
+    el("dt", { text: "Fallbacks (holdings retained)" }), el("dd", { text: `exact ${runs.exact.fallbacks}, QAOA ${runs.qaoa.fallbacks}` }),
+    el("dt", { text: "Cash ledger reconciles from fills" }), el("dd", {}, statusMark(keys.every((k) => runs[k].cash_reconciliation.reconciles) ? "pass" : "fail")))));
+}
+
+// ================================================================ QAOA study
+let penaltyView = null;
+function qaoa(root) {
+  if (!OK.qaoa_study) return root.append(unavailable("qaoa_study"));
+  const S = R.qaoa_study, B = S.baselines, scales = S.settings.penalty_scales, layers = S.settings.layers;
+  if (!penaltyView) penaltyView = scales[0];
+  root.append(el("h2", { text: "Portfolio search with forecasts held fixed" }));
+  root.append(el("p", { class: "lede", text: `${S.decisions.length} saved month-end decisions, each solved ${S.settings.seeds} times per setting. ${S.decisions[0].bitstrings} bitstrings, of which ${S.decisions[0].feasible_portfolios} select exactly three funds. Probabilities are the exact output distribution of the tuned circuit (a simulator privilege), so they carry no shot noise.` }));
+  const best = [...S.summary].sort((a, b) => (b.optimal_probability || 0) - (a.optimal_probability || 0))[0];
+  root.append(el("div", { class: "grid g4" },
+    tile("Exact enumeration", `${B.exact_enumeration.evaluations} evaluations`, "always optimal; the answer key"),
+    tile("Swap search", fmt.pct(B.swap_search.found_optimum_rate, 0) + " optimal", `about ${fmt.fix(B.swap_search.mean_evaluations, 0)} evaluations per run, ${B.swap_search.runs_per_decision} runs per decision`),
+    tile("Random bitstrings", `${fmt.fix(B.uniform_sampling.expected_draws_to_optimum, 0)} draws`, `expected to hit the optimum; ${fmt.fix(B.uniform_sampling.draws_for_95_percent, 0)} for 95% confidence`),
+    tile("QAOA, best setting", `${fmt.compact(best.median_total_shots)} shots`, `depth ${best.layers}, penalty ${best.penalty_scale}: optimum in ${fmt.pct(best.found_optimum_rate, 0)} of runs`)));
+  const g = el("div", { class: "grid g2" }); root.append(g);
+  const colors = [css("o1"), css("o2"), css("o3")];
+  const groupBars = (field, title, sub, rule) => xy(g, { title, sub, height: 260, x: { kind: "band", cats: scales, fmt: (s) => `penalty × ${s}`, label: "Cardinality penalty, relative to the provably sufficient value" },
+    y: { zero: true, fmt: axis.pct }, rules: [{ y: rule, label: "random bitstring", legend: "Uniform random bitstring" }],
+    series: layers.map((p, i) => ({ name: `Depth p = ${p}`, color: colors[i % 3], type: "bars", fmt: (v) => fmt.pct(v, 1), data: scales.map((s) => { const r = S.summary.find((x) => x.layers === p && x.penalty_scale === s); return { x: s, y: r ? r[field] : null }; }).filter((d) => d.y != null) })) });
+  groupBars("feasible_probability", "Chance a shot is a valid portfolio", "Mean over decisions and seeds. Deeper circuits concentrate more probability on exactly three funds.", B.uniform_sampling.feasible_probability);
+  groupBars("optimal_probability", "Chance a shot is the best portfolio", "A weaker penalty lets the financial objective shape the distribution, at the price of the feasibility guarantee.", B.uniform_sampling.optimal_probability);
+
+  root.append(card("Summary by setting", "Selection rule: " + S.selection_rule + ".", table([
+    { h: "Depth p", n: 1, v: (r) => String(r.layers) }, { h: "Penalty", n: 1, v: (r) => "× " + r.penalty_scale },
+    { h: "Found optimum", n: 1, v: (r) => fmt.pct(r.found_optimum_rate, 0) }, { h: "No valid sample", n: 1, v: (r) => String(r.no_feasible_sample ?? "–") },
+    { h: "P(feasible)", n: 1, v: (r) => fmt.pct(r.feasible_probability, 1) }, { h: "P(optimal)", n: 1, v: (r) => fmt.pct(r.optimal_probability, 2) }, { h: "vs random", n: 1, v: (r) => fmt.fix(r.advantage_over_uniform, 1) + "×" },
+    { h: "Total shots", n: 1, v: (r) => fmt.int(r.median_total_shots) }, { h: "Circuit evaluations", n: 1, v: (r) => fmt.int(r.median_objective_evaluations) },
+    { h: "Two-qubit gates", n: 1, v: (r) => fmt.int(r.two_qubit_gates) }, { h: "Circuit depth", n: 1, v: (r) => fmt.int(r.depth) }, { h: "Time", n: 1, v: (r) => fmt.secs(r.mean_seconds) },
+    { h: "Feasibility guaranteed", title: "Whether the penalty makes every invalid selection score worse than every valid one", v: (r) => r.penalty_dominates ? "yes" : "no" }], S.summary),
+    el("p", { class: "note", text: `Total shots include every objective evaluation during parameter tuning plus the final sample. Gate counts assume all-to-all connectivity with no routing. Times are CPU simulation times. Every circuit uses ${S.summary[0].qubits} qubits, and each row is ${S.summary[0].runs} runs. ` + cap(S.evidence_label) + "." })));
+
+  const controls = el("div", { class: "controls" }, el("label", { text: "Per-decision view at penalty" }));
+  const seg = el("div", { class: "seg", role: "group", "aria-label": "Penalty scale" });
+  for (const s of scales) seg.append(el("button", { type: "button", "aria-pressed": String(penaltyView === s), text: "× " + s, onclick: () => { penaltyView = s; render("qaoa"); } }));
+  controls.append(seg); root.append(controls);
+  const dcats = S.decisions.map((d) => d.index);
+  const g2 = el("div", { class: "grid" }); root.append(g2);
+  xy(g2, { title: "Chance of the best portfolio, decision by decision", sub: "Mean over seeds. The instance changes every month because the forecasts do; the circuit depth and penalty are the only things varied here.", height: 260,
+    x: { kind: "band", cats: dcats, fmt: (i) => fmt.mon(S.decisions[i].data_cutoff), minGap: 64, tipFmt: (i) => `${fmt.date(S.decisions[i].data_cutoff)}: optimum ${S.decisions[i].exact_selected.map((s) => s.split(".")[0]).join(", ")}`, label: "Decision (data cutoff)" },
+    y: { zero: true, fmt: axis.pct }, rules: [{ y: B.uniform_sampling.optimal_probability, label: "random bitstring", legend: "Uniform random bitstring" }],
+    series: layers.map((p, i) => ({ name: `Depth p = ${p}`, color: colors[i % 3], type: "line", markers: true, fmt: (v) => fmt.pct(v, 2), data: dcats.map((d) => { const rs = S.runs.filter((r) => r.decision === d && r.layers === p && r.penalty_scale === penaltyView && r.optimal_probability != null); return { x: d, y: rs.length ? rs.reduce((a, r) => a + r.optimal_probability, 0) / rs.length : null }; }).filter((d) => d.y != null) })) });
+  root.append(card("The instances", "How hard each month's selection problem is, in financial objective units.", table([
+    { h: "Data cutoff", v: (d) => fmt.date(d.data_cutoff) }, { h: "Optimal selection", v: (d) => d.exact_selected.map((s) => s.split(".")[0]).join(", ") },
+    { h: "Gap to 2nd best", n: 1, v: (d) => fmt.sig(d.second_best_gap, 2) }, { h: "Median gap", n: 1, v: (d) => fmt.sig(d.median_gap, 2) }, { h: "Worst gap", n: 1, v: (d) => fmt.sig(d.worst_gap, 2) },
+    { h: "Swap search optimal", n: 1, v: (d) => fmt.pct(d.swap_search.found_optimum_rate, 0) }, { h: "Swap evaluations", n: 1, v: (d) => fmt.fix(d.swap_search.mean_evaluations, 1) }], S.decisions, { nowrap: true }),
+    el("p", { class: "note", text: "Gaps are absolute differences in the financial objective (" + S.gap_unit + "). Ratios are avoided because the optimum can be near zero or negative." })));
+}
+
+// ================================================================ Risk forecasts
+function forecasts(root) {
+  if (!OK.risk_forecast) return root.append(unavailable("risk_forecast"));
+  const F = R.risk_forecast, rows = F.rows.filter((r) => r.status === "ok"), S = F.summary;
+  root.append(el("h2", { text: "Loss-probability forecasts for the portfolios actually targeted" }));
+  root.append(el("p", { class: "lede", text: `${F.question}. Model: ${F.model}. Role: ${F.role}.` }));
+  root.append(el("div", { class: "grid g4" },
+    tile("IQAE intervals containing the exact discrete answer", `${S.iqae_covers_discrete} / ${S.decisions}`, `${fmt.pct(1 - F.settings.alpha, 0)} nominal confidence, epsilon ${F.settings.epsilon}`),
+    tile("Largest grid error", fmt.pct(S.largest_discretization_error, 2), `between the ${2 ** F.settings.qubits}-point grid and the normal CDF`),
+    tile("Mean forecast probability", fmt.pct(S.mean_forecast_probability, 1), `over ${S.scored_decisions} decisions with a full realized window`),
+    tile("Realized loss events", `${S.realized_loss_events} / ${S.scored_decisions}`, "too few windows to judge calibration")));
+  const cats = rows.map((_, i) => i);
+  const x = { kind: "band", cats, fmt: (i) => fmt.mon(rows[i].data_cutoff), minGap: 64, tipFmt: (i) => `${fmt.date(rows[i].data_cutoff)}: ${rows[i].selected.map((s) => s.split(".")[0]).join(", ")}`, label: "Decision (data cutoff)" };
+  const g = el("div", { class: "grid" }); root.append(g);
+  xy(g, { title: "Forecast probability of losing more than " + fmt.pct(F.settings.threshold, 0), sub: "The continuous normal model against the exact sum on the discrete grid that both estimators target. Their distance is grid error.", height: 250,
+    x, y: { zero: true, fmt: axis.pct },
+    series: [{ name: "Normal CDF (continuous model)", color: css("s3"), type: "line", markers: true, fmt: (v) => fmt.pct(v, 2), data: rows.map((r, i) => ({ x: i, y: r.analytical_continuous })) },
+      { name: "Exact discrete sum", color: css("ink"), type: "tick", fmt: (v) => fmt.pct(v, 2), data: rows.map((r, i) => ({ x: i, y: r.exact_discrete })) }] });
+  const pp = (v) => (v * 100).toFixed(2).replace("-", "−") + " pp";
+  xy(g, { title: "Estimator error against the exact discrete answer", sub: `Estimate minus the exact discrete probability, in percentage points, with each method's ${fmt.pct(1 - F.settings.alpha, 0)} interval. An interval that crosses zero contains the target. Monte Carlo used ${fmt.int(rows[0].monte_carlo_work)} samples per decision; IQAE used a median of ${fmt.int(median(rows.map((r) => r.iqae_work)))} state-preparation calls.`, height: 260,
+    x, y: { zero: true, fmt: (v, step) => (v * 100).toFixed(step && step < 0.00095 ? 2 : 1).replace("-", "−") },
+    series: [{ name: "Monte Carlo", color: css("s1"), type: "range", fmt: pp, data: rows.map((r, i) => ({ x: i, y: r.monte_carlo.estimate - r.exact_discrete, lo: r.monte_carlo.ci_low - r.exact_discrete, hi: r.monte_carlo.ci_high - r.exact_discrete })) },
+      { name: "IQAE (CUDA-Q)", color: css("s2"), type: "range", fmt: pp, data: rows.map((r, i) => ({ x: i, y: r.iqae.estimate - r.exact_discrete, lo: r.iqae.ci_low - r.exact_discrete, hi: r.iqae.ci_high - r.exact_discrete })) }] });
+  const scored = rows.map((r, i) => ({ r, i })).filter((o) => o.r.realized_return != null);
+  xy(g, { title: `What happened next: equity change over the following ${rows[0].horizon_sessions} sessions`, sub: "Realized account return after each decision. A forecast is a probability under a model; this is one outcome per window.", height: 230,
+    x: { ...x, cats: scored.map((o) => o.i) }, y: { zero: true, fmt: axis.pct }, rules: [{ y: -F.settings.threshold, label: "loss threshold", legend: "Loss threshold" }], forceLegend: true,
+    series: [{ name: "Realized return", color: css("neutral"), type: "bars", fmt: (v) => fmt.pct(v, 2), data: scored.map((o) => ({ x: o.i, y: o.r.realized_return })) }], foot: cap(F.realized_convention) + "." });
+  root.append(card("Forecast table", null, table([
+    { h: "Data cutoff", v: (r) => fmt.date(r.data_cutoff) }, { h: "Portfolio", v: (r) => r.selected.map((s) => s.split(".")[0]).join(", ") },
+    { h: "Forecast mean", n: 1, v: (r) => fmt.pct(r.forecast_mean, 2) }, { h: "Forecast std", n: 1, v: (r) => fmt.pct(r.forecast_std, 2) },
+    { h: "Normal CDF", n: 1, v: (r) => fmt.pct(r.analytical_continuous, 2) }, { h: "Exact discrete", n: 1, v: (r) => fmt.pct(r.exact_discrete, 2) },
+    { h: "Monte Carlo", n: 1, v: (r) => `${fmt.pct(r.monte_carlo.estimate, 2)} [${fmt.pct(r.monte_carlo.ci_low, 2)}, ${fmt.pct(r.monte_carlo.ci_high, 2)}]` },
+    { h: "IQAE", n: 1, v: (r) => `${fmt.pct(r.iqae.estimate, 2)} [${fmt.pct(r.iqae.ci_low, 2)}, ${fmt.pct(r.iqae.ci_high, 2)}]` },
+    { h: "MC work", n: 1, v: (r) => fmt.int(r.monte_carlo_work) }, { h: "IQAE work", n: 1, v: (r) => fmt.int(r.iqae_work) }, { h: "Max k", n: 1, v: (r) => String(r.iqae_max_grover_power) },
+    { h: "Realized", n: 1, v: (r) => fmt.pct(r.realized_return, 2) }, { h: "Loss event", v: (r) => r.realized_loss_event == null ? "–" : r.realized_loss_event ? "yes" : "no" }], rows, { nowrap: true }),
+    el("p", { class: "note", text: cap(S.calibration_note) + ". An exposure rule driven by these estimates (the plan's risk overlay) is not built; see DECISIONS.md." })));
+}
+
+// ================================================================ Reproduce
+function reproduce(root) {
+  const Mf = DATA.manifest, env = Mf.environment;
+  root.append(el("h2", { text: "Reproduce this run" }));
+  root.append(el("p", { class: "lede", text: "The run directory is the unit of reproduction: configuration, manifest, results, the backtests it launched and this page." }));
+  const save = el("button", { class: "ghost", type: "button", text: "Download config.json", onclick: () => {
+    const a = el("a", { href: URL.createObjectURL(new Blob([JSON.stringify(DATA.config, null, 2)], { type: "application/json" })), download: `lab-config-${Mf.run_id}.json` });
+    document.body.append(a); a.click(); a.remove(); } });
+  root.append(el("div", { class: "grid g2" },
+    card("Run record", null, el("dl", { class: "kv" },
+      el("dt", { text: "Run directory" }), el("dd", {}, el("code", { text: "runs/lab/" + Mf.run_id })),
+      el("dt", { text: "Command" }), el("dd", {}, el("code", { text: ".tools/cudaq-venv/bin/python -m qflab.lab run configs/lab.json" })),
+      el("dt", { text: "Config SHA-256" }), el("dd", {}, el("code", { text: Mf.config_sha256 })),
+      el("dt", { text: "Seed" }), el("dd", { text: String(Mf.seed) }),
+      el("dt", { text: "Code commit" }), el("dd", {}, el("code", { text: (env.git_commit || "unknown") + (env.git_dirty ? " (with uncommitted changes)" : "") })),
+      el("dt", { text: "Started / finished" }), el("dd", { text: `${Mf.started} / ${Mf.finished || "–"}` }),
+      el("dt", { text: "Reused sections from" }), el("dd", { text: Mf.reused_from || "none; every section ran in this run" })), el("p", {}, save)),
+    card("Environment", null, el("dl", { class: "kv" },
+      el("dt", { text: "Quantum SDK" }), el("dd", { text: `CUDA-Q ${env.packages.cudaq}` }),
+      el("dt", { text: "Simulator target" }), el("dd", { text: `${Mf.quantum_target} (CPU statevector); noise study on density-matrix-cpu` }),
+      el("dt", { text: "Python" }), el("dd", { text: `${env.python}; numpy ${env.packages.numpy}; scipy ${env.packages.scipy}` }),
+      el("dt", { text: "Platform" }), el("dd", { text: `${env.platform}; ${env.cpu_count} CPUs` }),
+      el("dt", { text: "Backtester" }), el("dd", { text: "Rust NautilusTrader 0.66.0 engine; see Cargo.lock in each backtest directory" }),
+      el("dt", { text: "Worker processes" }), el("dd", { text: String(Mf.workers) })))));
+  root.append(card("Sections", "Failed or skipped sections stay in the record.", table([
+    { h: "Section", v: (r) => r[0] }, { h: "Status", v: (r) => r[1].status }, { h: "Time", n: 1, v: (r) => fmt.secs(r[1].seconds) }, { h: "Detail", v: (r) => r[1].error || r[1].from || "" }], Object.entries(Mf.sections))));
+  if (OK.portfolio) root.append(card("Backtest run directories", "Each holds a replayable config.json, the frozen data snapshot, the solver's saved answers, fills, orders and equity. Replaying needs no Python and no simulator.", table([
+    { h: "Run", v: (r) => r.label }, { h: "Directory", v: (r) => el("code", { text: r.run_directory }) }, { h: "Engine status", v: (r) => r.status }, { h: "Wall time", n: 1, v: (r) => fmt.secs(r.wall_seconds) }], Object.values(R.portfolio.runs))));
+  root.append(card("Configuration", null, el("pre", { text: JSON.stringify(DATA.config, null, 2) })));
+}
+
+// ================================================================ shell
+const TABS = [["overview", "Overview", overview], ["risk", "Risk lab", riskLab], ["portfolio", "Portfolio", portfolio], ["qaoa", "QAOA search", qaoa], ["forecasts", "Risk forecasts", forecasts], ["reproduce", "Reproduce", reproduce]];
+const main = document.getElementById("main"), tabs = document.getElementById("tabs");
+let current = "overview";
+function render(id) {
+  current = id;
+  const keep = scrollY;
+  for (const [key] of TABS) {
+    document.getElementById("tab-" + key).hidden = key !== id;
+    document.getElementById("btn-" + key).setAttribute("aria-selected", String(key === id));
+  }
+  const root = document.getElementById("tab-" + id);
+  root.replaceChildren();
+  try { TABS.find((t) => t[0] === id)[2](root); }
+  catch (error) { root.append(el("p", { class: "empty", text: "This section could not be drawn: " + error.message })); console.error(error); }
+  scrollTo(0, keep);
+}
+for (const [key, label] of TABS) {
+  tabs.append(el("button", { id: "btn-" + key, role: "tab", type: "button", "aria-controls": "tab-" + key, text: label, onclick: () => { history.replaceState(null, "", "#" + key); render(key); scrollTo(0, 0); } }));
+  main.append(el("section", { class: "tab", id: "tab-" + key, role: "tabpanel", hidden: true }));
+}
+(function meta() {
+  const Mf = DATA.manifest, host = document.getElementById("meta");
+  const add = (k, v) => host.append(el("span", {}, k + " ", el("b", { text: v })));
+  add("Run", Mf.run_id); add("Status", Mf.status.replace(/_/g, " ")); add("Simulator", `CUDA-Q ${Mf.environment.packages.cudaq}, ${Mf.quantum_target}`); add("Seed", String(Mf.seed));
+})();
+document.getElementById("theme").addEventListener("click", () => {
+  const rootEl = document.documentElement;
+  const dark = rootEl.dataset.theme ? rootEl.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  rootEl.dataset.theme = dark ? "light" : "dark";
+});
+const asked = new URLSearchParams(location.search).get("theme");
+if (asked === "dark" || asked === "light") document.documentElement.dataset.theme = asked;
+let resizeTimer;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => render(current), 150); });
+const startTab = location.hash.slice(1);
+render(TABS.some((t) => t[0] === startTab) ? startTab : "overview");
+</script>
+</body>
+</html>

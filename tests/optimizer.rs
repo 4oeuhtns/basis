@@ -262,3 +262,155 @@ fn exact_python_selection_drives_native_orders_with_causal_state_and_safe_fallba
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+fn qaoa_settings() -> qflab_backtest::config::SolverConfig {
+    serde_json::from_value(
+        json!({"method":"qaoa_cudaq","layers":1,"shots":256,"final_shots":1024,
+        "grid":6,"maxiter":10,"seed":5,"penalty_scale":"1","target":"qpp-cpu"}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn quantum_solver_settings_are_validated_and_responses_must_match_the_configured_method() {
+    let root = std::env::temp_dir().join(format!("qflab-solver-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let source = root.join("snapshot");
+    fixture(&source, "optimizer");
+    let exact = config(&source);
+    let mut quantum = exact.clone();
+    quantum.optimizer.as_mut().unwrap().solver = Some(qaoa_settings());
+    quantum.optimizer.as_mut().unwrap().timeout_seconds = 120;
+    quantum.validate().unwrap();
+    // A long timeout is reserved for circuit simulation; exact enumeration keeps its cap.
+    let mut slow_exact = exact.clone();
+    slow_exact.optimizer.as_mut().unwrap().timeout_seconds = 120;
+    assert!(slow_exact.validate().is_err());
+    for (field, bad) in [
+        ("method", json!("annealer")),
+        ("layers", json!(0)),
+        ("shots", json!(1)),
+        ("penalty_scale", json!("0")),
+        ("target", json!("../evil")),
+    ] {
+        let mut value = serde_json::to_value(qaoa_settings()).unwrap();
+        value[field] = bad;
+        let mut broken = quantum.clone();
+        broken.optimizer.as_mut().unwrap().solver = Some(serde_json::from_value(value).unwrap());
+        assert!(broken.validate().is_err(), "{field}");
+    }
+
+    // Both methods receive the same forecast inputs: only the solver block is added.
+    let exact_run = run(&exact);
+    let first = &exact_run.state.optimizer_records[0];
+    assert!(first.request.get("solver").is_none());
+    let snapshot = PortfolioSnapshot::load(&quantum).unwrap();
+    let anchor = qflab_backtest::research::Anchor {
+        equity: exact_run.state.equity[0].clone(),
+        holdings: exact_run
+            .state
+            .holdings
+            .iter()
+            .filter(|h| h.timestamp == exact_run.state.equity[0].timestamp)
+            .cloned()
+            .collect(),
+        trigger: "initial_allocation".into(),
+    };
+    let mut paired = qflab_backtest::research::build_request(&quantum, &snapshot, &anchor).unwrap();
+    assert_eq!(paired["solver"]["method"], "qaoa_cudaq");
+    paired.as_object_mut().unwrap().remove("solver");
+    assert_eq!(paired, first.request);
+
+    // An answer labeled with the other method is never accepted, in either direction.
+    let response = first.response.clone().unwrap();
+    assert!(validate_response(&exact, &first.request, &first.request_sha256, &response).is_ok());
+    let error = validate_response(&quantum, &first.request, &first.request_sha256, &response)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("expected method qaoa_cudaq"), "{error}");
+    let mut relabeled = response.clone();
+    relabeled["method"] = json!("qaoa_cudaq");
+    assert!(validate_response(&exact, &first.request, &first.request_sha256, &relabeled).is_err());
+    assert!(validate_response(&quantum, &first.request, &first.request_sha256, &relabeled).is_ok());
+    // A search that found no valid portfolio is reported, not repaired: holdings are retained.
+    let mut empty = relabeled.clone();
+    empty["status"] = json!("no_feasible_sample");
+    let error = validate_response(&quantum, &first.request, &first.request_sha256, &empty)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no usable portfolio"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cudaq_qaoa_worker_drives_native_orders_and_replays_without_python() {
+    let python = std::env::var_os("QFLAB_QUANTUM_PYTHON")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".tools/cudaq-venv/bin/python"));
+    if !python.exists() {
+        eprintln!("skipped: no CUDA-Q environment at {}", python.display());
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("qflab-qaoa-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let source = root.join("snapshot");
+    fixture(&source, "optimizer");
+    let mut c = config(&source);
+    {
+        let settings = c.optimizer.as_mut().unwrap();
+        // No canonicalize: resolving the venv symlink would lose its installed packages.
+        settings.python_path = std::env::current_dir().unwrap().join(&python);
+        settings.solver = Some(qaoa_settings());
+        settings.timeout_seconds = 120;
+    }
+    let saved = backtest::run_config(c.clone()).unwrap();
+    let records: Vec<Value> =
+        serde_json::from_slice(&fs::read(saved.join("solver_replay.json")).unwrap()).unwrap();
+    assert_eq!(records.len(), 3);
+    for record in &records {
+        assert_eq!(
+            record["status"], "feasible",
+            "{}",
+            record["fallback_reason"]
+        );
+        let response = &record["response"];
+        assert_eq!(response["method"], "qaoa_cudaq");
+        assert_eq!(response["selected"].as_array().unwrap().len(), 3);
+        let diagnostics = &response["diagnostics"];
+        // The gap to the enumerated optimum is reported, and can never be negative.
+        let gap: i128 = diagnostics["objective_gap_integer"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(gap >= 0);
+        assert!(diagnostics["resources"]["total_shots"].as_u64().unwrap() > 1024);
+        assert_eq!(diagnostics["resources"]["qubits"], 8);
+        assert!(record["elapsed_wall_seconds"].as_f64().unwrap() > 0.0);
+    }
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(saved.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["optimizer_method"], "qaoa_cudaq");
+    let summary: Value =
+        serde_json::from_slice(&fs::read(saved.join("summary.json")).unwrap()).unwrap();
+    assert!(summary["fill_count"].as_u64().unwrap() > 0);
+    assert_eq!(summary["optimizer_fallbacks"], 0);
+
+    // Frozen answers replay bit-for-bit with no Python, and therefore no simulator.
+    let mut replay = PortfolioConfig::load(&saved.join("config.json")).unwrap();
+    replay.optimizer.as_mut().unwrap().python_path = PathBuf::from("/no/python/needed/for/replay");
+    let replayed = backtest::run_config(replay).unwrap();
+    for name in [
+        "equity.csv",
+        "holdings.csv",
+        "decision_log.json",
+        "summary.json",
+    ] {
+        assert_eq!(
+            fs::read(saved.join(name)).unwrap(),
+            fs::read(replayed.join(name)).unwrap(),
+            "{name}"
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}

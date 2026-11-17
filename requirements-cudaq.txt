@@ -1,0 +1,5 @@
+# CUDA-Q research environment (Python 3.12 or 3.13). See README "Quantum lab".
+cudaq==0.17.0
+numpy==2.5.5
+scipy==1.18.1
+pytest==9.1.1

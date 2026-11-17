@@ -1,6 +1,6 @@
 # Quantum Finance Lab
 
-A small **Rust backtest using NautilusTrader**, with a separate **Python research worker**.
+A small **Rust backtest using NautilusTrader**, a separate **Python research worker**, and a **quantum lab on CUDA-Q** that compares classical and quantum methods and reports the results in one tearsheet.
 
 Python downloads and prepares data; Rust runs the trading simulation. Nautilus maintains the actual orders, fills, cash, and holdings. Usage and explanations live in this README; internal notes and lessons remain ignored.
 
@@ -25,9 +25,20 @@ src/
 ├── research.rs           Send past-only requests to Python; validate and replay answers
 ├── output.rs             Save reports, file hashes, and run provenance
 └── demo/                 Original single-fund example and saved-instruction replay
-qflab/                    Python data preparation, portfolio selection, and QAOA experiment
+qflab/                    Python research code
+├── market_data.py        Download and freeze historical snapshots
+├── optimizer_worker.py   Exact portfolio selection (answers the Rust backtester)
+├── qaoa_worker.py        QAOA portfolio selection on CUDA-Q (same protocol)
+├── lab.py                Experiment runner: one config in, one run directory out
+├── problems/             Canonical expectation problems shared by every estimator
+├── methods/              Classical estimators, IQAE, QAOA search, swap search (no SDK imports)
+├── backends/             CUDA-Q kernels and simulator targets; the only SDK-specific module
+├── experiments/          Risk lab, QAOA study, paired backtests, risk forecasts, metrics
+├── ui/                   Tearsheet builder and its HTML template
+└── qaoa.py               QUBO construction and checks; optional Classiq export
 configs/                  Experiment recipes
-tests/                   Accounting, timing, data, and worker checks
+tests/                    Accounting, timing, data, worker, circuit, and estimator checks
+DECISIONS.md              Every design decision made while building the lab, with its cost if wrong
 ```
 
 For the current optimizer, follow `src/backtest/mod.rs` → `src/research.rs` → `qflab/optimizer_worker.py`. Then read `src/backtest/strategy.rs` to see how returned weights become orders. `src/backtest/state.rs` describes the records written to each run directory.
@@ -201,7 +212,122 @@ The history remains retrospective adjusted research data. The transport excludes
 
 Start reading `qflab/optimizer_worker.py` for the score and exact search, `src/research.rs` for the request/reply coordinator, and `src/backtest/strategy.rs` for converting selected weights into native orders. The integration checks include later-price changes, actual-state inputs, fees, delayed delivery, failed workers, timeout fallback, malformed responses, and replay with Python unavailable. An independent NumPy calculation checks every binary model energy and the best feasible selection.
 
-## First QAOA portfolio experiment
+## Quantum lab on CUDA-Q
+
+The lab compares classical and quantum methods on three questions that are kept apart in every report:
+
+1. **Expectation estimation:** how accurately and efficiently does a method estimate one number?
+2. **Portfolio optimization:** with forecasts fixed, how well does a search method find the best selection?
+3. **Historical study:** did the selection change what happened in a backtest, after costs?
+
+A better objective value does not establish better returns, and fewer queries do not establish faster execution.
+
+Quantum circuits are written directly as [CUDA-Q](https://nvidia.github.io/cuda-quantum/latest/) kernels and run on a local simulator. No account, quota, or network call is involved. CUDA-Q **0.17.0** needs Python 3.12 or 3.13, so it has its own environment (already created in this workspace):
+
+```sh
+python3.12 -m venv .tools/cudaq-venv
+.tools/cudaq-venv/bin/python -m pip install -r requirements-cudaq.txt
+```
+
+On a Mac, CUDA-Q installs CPU simulators: `qpp-cpu` (statevector) and `density-matrix-cpu` (for noise). On a machine with an NVIDIA GPU, set `"target": "nvidia"` in `configs/lab.json` and in the solver block; nothing else changes. Simulating a circuit on a CPU or GPU is classical computation, and every result is labeled that way.
+
+Run everything, then open the report:
+
+```sh
+.tools/cudaq-venv/bin/python -m qflab.lab run configs/lab.json
+open runs/lab/<run id>/tearsheet.html
+```
+
+A full run takes about nine minutes on this machine. It writes one directory under `runs/lab/` containing `config.json`, `manifest.json` (code commit, versions, seed, timings, the status of each section), `results.json`, the backtests it launched, and `tearsheet.html`. To rerun one part and copy the rest from an earlier run:
+
+```sh
+.tools/cudaq-venv/bin/python -m qflab.lab run configs/lab.json --only risk_lab --reuse runs/lab/<earlier run>
+.tools/cudaq-venv/bin/python -m qflab.lab tearsheet runs/lab/<run id>    # rebuild the page only
+```
+
+### The tearsheet
+
+`tearsheet.html` is a single file with no network dependencies. It has six tabs:
+
+| Tab | What it shows |
+| --- | --- |
+| Overview | Headline numbers, plain-language findings, evidence labels, and the plan's scientific checks with where each one's evidence comes from |
+| Risk lab | The call price by every method, error and interval width against work, circuit resources, grid size, strikes, and noise |
+| Portfolio | Equity, drawdown, and metrics for exact selection, QAOA, and an equal-weight benchmark; a switch between the exact and QAOA runs for holdings and the decision log |
+| QAOA search | Feasible and optimal probability by circuit depth and penalty, against enumeration, a swap search, and random bitstrings |
+| Risk forecasts | Loss-probability forecasts for the portfolios actually targeted, by normal CDF, exact discrete sum, Monte Carlo, and IQAE |
+| Reproduce | Run record, environment, section statuses, backtest directories, and a button to download the configuration |
+
+Charts show values on hover, and each has a data table underneath. The page follows the system light or dark theme and has a toggle. Appending `?theme=dark` to the address forces a theme.
+
+### Risk lab: one European call, several estimators
+
+The first experiment prices a call under a lognormal terminal price. Two references are kept separate:
+
+- **Analytical, continuous model:** Black–Scholes.
+- **Exact discrete sum:** the exact answer for the truncated grid that is loaded into the circuit. Monte Carlo and the quantum estimator are judged against this one.
+
+Their difference is **model error**. It belongs to the grid, and no estimator can remove it.
+
+The quantum method is **iterative amplitude estimation (IQAE)**. A circuit `A` loads the probability of each price bin onto the scenario qubits and rotates one extra *indicator* qubit by the scaled payoff, so the chance of measuring 1 on that qubit equals the discounted expected payoff divided by a known scale. Repeating a *Grover step* `k` times turns that chance into `sin²((2k+1)θ)`, which changes quickly with `θ`, so a few hundred shots at a large `k` pin the answer down tightly. The price is paid in depth: each Grover step runs `A` and its inverse again.
+
+- `qflab/problems/expectation.py` builds the grid, probabilities, and scaled payoff once, for every method.
+- `qflab/methods/iqae.py` is the algorithm, with no SDK import. It only needs a function that runs `Q^k A` for some shots and counts ones.
+- `qflab/backends/cudaq_backend.py` builds `A` from explicit rotations and CNOTs (about `2 × 2^n` rotations for `n` scenario qubits) and the Grover step from it. Loading a dense table costs more gates than the classical sum has terms, and the report shows that.
+
+**Work** is counted as `shots × (2k + 1)` applications of `A` or its inverse, summed over rounds, and compared with the number of samples a classical method draws. Libraries count this differently, so the convention is printed beside every table.
+
+With the committed configuration (32 price bins, 30 seeds per budget) the run found:
+
+| Method | Target | Work | Median error |
+| --- | --- | --- | --- |
+| Monte Carlo | discrete grid | 100,000 samples | $0.025 |
+| IQAE on CUDA-Q | discrete grid | about 38,000 state-preparation calls | $0.005 |
+| Scrambled Sobol | continuous model | about 33,000 samples | $0.001 |
+
+IQAE needed fewer queries than Monte Carlo for the same error, as theory predicts. Its deepest circuit at that budget had about 98,000 gates, which only an ideal simulator can run. A stronger classical method, Sobol, beat both, and the 32-point grid is itself $0.073 away from Black–Scholes. A call option has a closed form: it is a verification problem for the machinery, not a case for quantum advantage.
+
+A separate noise study adds depolarizing error after two-qubit gates. At a 0.2% error rate, IQAE's intervals contained the right answer in about half of the runs instead of 95%, while staying just as narrow.
+
+### QAOA inside the backtest
+
+`configs/optimized_qaoa.json` is `configs/optimized.json` plus a `solver` block:
+
+```json
+"solver": {"method": "qaoa_cudaq", "layers": 2, "shots": 1024, "final_shots": 2048,
+           "grid": 12, "maxiter": 40, "seed": 20261116, "penalty_scale": "1", "target": "qpp-cpu"}
+```
+
+```sh
+./scripts/cargo-local run --locked --offline -- configs/optimized_qaoa.json
+```
+
+With that block present, Rust starts `qflab/qaoa_worker.py` instead of the exact worker and adds the block to each request. Forecasts, the financial objective, constraints, timing, and fees come from the same code as before, so a paired run differs only in how the selection is searched. Without the block, requests are byte-for-byte what they were, and earlier saved runs still replay.
+
+One QAOA decision works like this:
+
+1. Build the same integer financial model the exact solver uses, and add the cardinality penalty to get a QUBO. Every one of the 256 bitstrings is checked against the direct formula.
+2. Tune the circuit's angles on **sampled** energies: scan a 12 × 12 grid at depth 1, refine, then add layers one at a time starting from the previous layer's angles. Every evaluation costs `shots` circuit runs and is counted.
+3. Draw `final_shots` bitstrings. Score each one with the original financial model, and discard any that do not select exactly three funds.
+4. Return the best valid one. If there is none, the status is `no_feasible_sample`, Rust keeps the current holdings, and the fallback is logged. Nothing is repaired.
+
+The worker also enumerates the true optimum and reports the gap. That answer key is never used to choose. Frozen QAOA answers replay without Python or a simulator, exactly like exact ones.
+
+On the 2025 data, QAOA returned the enumerated optimum at all 13 decisions, so the two backtests are identical to the cent. The difference is cost: about 210,000 circuit shots and 6.5 seconds per decision, against 56 evaluations and about 30 milliseconds for enumeration. With eight funds there are only 56 valid portfolios, and keeping the best of 2,048 *random* bitstrings would also find the optimum 99.97% of the time. This size tests correctness and integration. It cannot show a speed advantage.
+
+`penalty_scale` multiplies the provably sufficient penalty. At `"1"` every invalid selection scores worse than every valid one. Smaller values are a declared experiment: the QAOA study shows a ten-times weaker penalty raises the chance that a shot is the best portfolio from about 1% to about 5% at depth 3, while the feasibility guarantee is lost and has to be enforced by the independent check in step 3.
+
+### Risk forecasts
+
+For each saved decision, the lab asks: under the return model fitted at the cutoff, what is the probability that the target portfolio loses more than 5% over the next 21 sessions? It answers with a normal CDF, the exact discrete sum, Monte Carlo, and IQAE, and then shows what the account actually did. These forecasts are **diagnostic**. They are attached to decisions and never change a trade. An exposure rule driven by them is not built yet.
+
+### What is not built
+
+The plan's optional research tracks (HHL and QSVT linear solvers, sampling-based optimization, quantum-assisted MCMC, covariance spectral methods, the 10,000-asset scaling study), the risk overlay, a Nautilus Parquet catalog, physical hardware runs, and a development/validation/final split of dates. `DECISIONS.md` records each of these with the reason.
+
+## Earlier Classiq QAOA experiment (optional)
+
+The CUDA-Q path above is the primary one. This section documents the earlier single-decision experiment that exports a Classiq model; it needs a Classiq account to execute and has only been built offline here.
 
 Start with **one saved monthly decision**. The exact solver already provides an answer key. QAOA is an alternative search method for the same estimated financial score: it does not replace the return forecast or receive future observations. `qflab/qaoa.py` handles this experiment separately from the trading loop.
 
@@ -255,7 +381,7 @@ This uses the Classiq cloud `simulator` backend and its account quota. `layers=1
 
 Every decoded outcome is scored independently using the original integer financial model. Invalid selections are recorded but cannot become the chosen answer. `result.json` reports the best valid selection, its objective gap from the exact optimum, feasible probability, optimal probability, every sampled selection, optimizer parameters/cost trace, and wall time including synthesis. `run.json` records compiled circuit width/depth; the result includes uniformly random probabilities for comparison. With eight decision bits, a uniform distribution produces a valid three-fund selection with probability `56/256 = 21.875%`. Finding a good answer once on this tiny problem does not establish a quantum speedup. A run with no valid sampled selection reports `no_feasible_sample` and supplies no portfolio.
 
-The actual simulator requires SDK authentication and available academic quota. Local model construction and export have been verified without cloud execution. After this one-decision experiment succeeds, the next integration is an explicit QAOA solver option at the existing Rust/Python boundary, with suitable solver timing and fallback behavior. Rust currently accepts the exact solver's response method; this experiment writes research evidence, and does not submit trades.
+The actual simulator requires SDK authentication and available academic quota. Local model construction and export have been verified without cloud execution. This experiment writes research evidence and does not submit trades; the solver option at the Rust/Python boundary is the CUDA-Q worker described above.
 
 Read the [Classiq portfolio example](https://github.com/Classiq/classiq-library/tree/main/applications/finance/portfolio_optimization) for the upstream `CombinatorialProblem` workflow and [SDK package metadata](https://pypi.org/project/classiq/1.32.0/) for compatibility. To run the optional SDK checks, install `requirements-dev.txt` in the quantum environment and run `.tools/qaoa-venv/bin/python -m pytest -q tests/test_qaoa.py`. The main test environment runs the math and sample-decoding checks without Classiq installed.
 
@@ -269,7 +395,7 @@ python3 -m qflab.worker \
 ./scripts/cargo-local run --locked --offline -- configs/replay.json
 ```
 
-This single-fund example writes a fixed-weight instruction to demonstrate serialization. The multi-fund optimizer above uses a complete trailing-data/state request and a sequential request/reply protocol. A future Classiq solver can consume the same canonical portfolio model used by the exact reference.
+This single-fund example writes a fixed-weight instruction to demonstrate serialization. The multi-fund optimizer above uses a complete trailing-data/state request and a sequential request/reply protocol.
 
 ## What gets saved
 
@@ -285,7 +411,13 @@ Read `summary.json` for ending portfolio value and `equity.csv` for each day's c
 ./scripts/cargo-local fmt --all -- --check
 .venv/bin/python -m pytest -q
 .venv/bin/python -m ruff check qflab tests
+.tools/cudaq-venv/bin/python -m pytest -q tests/test_expectation.py tests/test_iqae.py \
+  tests/test_qaoa_cudaq.py tests/test_lab.py tests/test_tearsheet.py
 ```
+
+The first Python command runs in the data environment and skips the tests that need SciPy or CUDA-Q; the last command runs those in the CUDA-Q environment. The Rust QAOA test uses `.tools/cudaq-venv/bin/python` (or `QFLAB_QUANTUM_PYTHON`) and reports itself as skipped when that environment is absent.
+
+The quantum checks compare the state-preparation circuit with the exact discrete distribution through the simulator's statevector, compare Grover powers with `sin²((2k+1)θ)`, compare reported gate counts with CUDA-Q's own resource count, compare the QAOA circuit with an independent NumPy simulation, check IQAE interval coverage across seeds, and run the worker through the same stdin/stdout protocol Rust uses.
 
 Install `requirements-dev.txt` and `requirements-data.txt` into `.venv` for the full test suite. The Rust historical integration test uses `.venv/bin/python` to generate an offline fixture; set `QFLAB_PYTHON` to use another environment containing the data packages. The research worker itself uses only Python's standard library.
 

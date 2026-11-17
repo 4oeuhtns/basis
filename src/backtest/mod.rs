@@ -222,16 +222,18 @@ pub fn run_config(config: PortfolioConfig) -> Result<PathBuf> {
         }
     };
     let state = &simulation.state;
-    if config.optimizer.is_some() {
+    if let Some(settings) = &config.optimizer {
         write_json(&output.join("optimizer_log.json"), &state.optimizer_records)?;
         write_json(&output.join("solver_replay.json"), &state.optimizer_records)?;
         write_json(
             &output.join("optimizer_events.json"),
             &state.optimizer_events,
         )?;
-        manifest["assumptions"]["optimizer"] = json!(
-            "past-only sequential exact enumeration outside engine callbacks; explicit simulated delay; invalid/failed/timed-out worker retains holdings; frozen responses replay without Python"
-        );
+        let method = settings.method();
+        manifest["assumptions"]["optimizer"] = json!(format!(
+            "past-only sequential {method} outside engine callbacks; explicit simulated delay; invalid/failed/timed-out/infeasible worker answer retains holdings; frozen responses replay without Python"
+        ));
+        manifest["optimizer_method"] = json!(method);
     }
     write_csv(&output.join("equity.csv"), &state.equity)?;
     write_csv(&output.join("holdings.csv"), &state.holdings)?;
